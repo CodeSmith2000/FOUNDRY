@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FOUNDRY // VAULT</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+        body { font-family: 'JetBrains+Mono', monospace; background-color: #020617; color: #f8fafc; }
+        .view { display: none; padding: 2rem; min-height: calc(100vh - 4rem); }
+        .view.active { display: block; }
+        .spec-input { background: #09090b; border: 1px solid #1e293b; padding: 10px; color: white; width: 100%; outline: none; }
+        label { font-size: 9px; font-weight: 900; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 4px; }
+    </style>
+</head>
+<body>
+    <header class="h-16 border-b border-zinc-800 flex justify-between items-center bg-slate-950 px-6 shrink-0 z-50 text-white">
+        <h1 class="font-black tracking-tighter text-2xl cursor-pointer" onclick="location.href='/index.html'">FOUNDRY_VAULT</h1>
+        <div id="sync-indicator" class="text-[10px] font-bold text-zinc-500 uppercase italic">System_Ready</div>
+    </header>
+
+    <main id="view-vault" class="view active">
+        <div class="max-w-7xl mx-auto">
+            <div class="flex justify-between items-center mb-10">
+                <h2 class="text-4xl font-black uppercase italic text-blue-500">Vault_Index</h2>
+                <button onclick="addProject()" class="bg-blue-600 px-6 py-2 text-[10px] font-black uppercase">New_Project</button>
+            </div>
+            <div id="project-grid" class="grid grid-cols-3 gap-6"></div>
+        </div>
+    </main>
+
+    <main id="view-detail" class="view"></main>
+
+    <div id="modalContainer" class="hidden fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div id="modalContent" class="bg-slate-950 border border-slate-800 w-full max-w-4xl p-10 border-t-4 border-t-blue-600"></div>
+    </div>
+
+    <script>
+        let db, SQL, currentProjectId;
+
+        async function init() {
+            SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` });
+            try {
+                const res = await fetch('/get_db');
+                if (res.ok) {
+                    const buf = await res.arrayBuffer();
+                    db = new SQL.Database(new Uint8Array(buf));
+                    const cols = ["img", "stock", "req", "desc", "links", "bulk_cost", "bulk_qty", "cad_link", "part_hash", "lead_time"];
+                    cols.forEach(c => { try { db.run(`ALTER TABLE parts ADD COLUMN ${c} TEXT`); } catch(e) {} });
+                } else { throw new Error("404"); }
+            } catch (err) {
+                db = new SQL.Database();
+                db.run(`CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT);
+                        CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER, part_num TEXT, img TEXT, stock INT DEFAULT 0, req INT DEFAULT 1, desc TEXT, links TEXT, bulk_cost REAL DEFAULT 0.0, bulk_qty INT DEFAULT 1, cad_link TEXT, part_hash TEXT, lead_time INT DEFAULT 7);`);
+            }
+            renderVault();
+        }
+
+        async function persist() {
+            const data = db.export();
+            await fetch('/save_db', { method: 'POST', body: data });
+            document.getElementById('sync-indicator').innerText = "SYNC_COMPLETE";
+            setTimeout(() => document.getElementById('sync-indicator').innerText = "System_Ready", 2000);
+        }
+
+        function renderVault() {
+            const res = db.exec("SELECT * FROM projects");
+            const projects = res[0] ? res[0].values : [];
+            document.getElementById('project-grid').innerHTML = projects.map(p => `
+                <div onclick="renderDetail(${p[0]})" class="bg-zinc-900 p-8 border border-zinc-800 hover:border-blue-600 cursor-pointer font-bold uppercase transition">
+                    <span class="text-zinc-600 text-[9px] block mb-2 font-black italic">PRJ_${p[0]}</span>${p[1]}
+                </div>`).join('');
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById('view-vault').classList.add('active');
+        }
+
+        function renderDetail(pId) {
+            currentProjectId = pId;
+            const projName = db.exec(`SELECT name FROM projects WHERE id=${pId}`)[0].values[0][0];
+            const res = db.exec(`SELECT * FROM parts WHERE project_id=${pId}`);
+            const parts = res[0] ? res[0].values : [];
+            const columns = res[0] ? res[0].columns : [];
+            const getCol = (name) => columns.indexOf(name);
+            
+            const total = parts.reduce((sum, p) => {
+                const cost = parseFloat(p[getCol('bulk_cost')]) || 0;
+                const qty = parseInt(p[getCol('bulk_qty')]) || 1;
+                const req = parseInt(p[getCol('req')]) || 1;
+                return sum + ((cost / qty) * req);
+            }, 0);
+
+            document.getElementById('view-detail').innerHTML = `
+                <div class="max-w-7xl mx-auto"><div class="flex gap-8">
+                    <div class="w-72 space-y-4">
+                        <button onclick="renderVault()" class="text-zinc-500 text-[10px] font-black uppercase tracking-widest hover:text-white transition">← Root</button>
+                        <div class="bg-slate-900 border border-slate-800 p-6 shadow-xl"><label>Valuation</label><div class="text-3xl font-black text-emerald-400">$${total.toFixed(2)}</div></div>
+                        <a href="/production.html?id=${pId}" class="block text-center bg-orange-600/10 border border-orange-600 text-orange-500 py-3 text-[10px] font-black uppercase italic tracking-widest">{ MANUFACTURING_OPS }</a>
+                        <a href="/command.html?id=${pId}" class="block text-center bg-blue-600/10 border border-blue-600 text-blue-500 py-3 text-[10px] font-black uppercase italic tracking-widest">{ COMMAND_&_ANALYTICS }</a>
+                        <button onclick="openPartModal(null)" class="w-full bg-zinc-100 text-zinc-950 py-3 text-[10px] font-black uppercase">Add_Part</button>
+                    </div>
+                    <div class="flex-1">
+                        <h2 class="text-6xl font-black uppercase tracking-tighter italic mb-10 underline decoration-blue-600 underline-offset-8">${projName}</h2>
+                        <div class="grid grid-cols-4 gap-6">${parts.map(p => `
+                            <div onclick="renderPartSpecs(${p[getCol('id')]})" class="relative aspect-square bg-zinc-900 border border-zinc-800 hover:border-blue-500 cursor-pointer group overflow-hidden">
+                                <img src="${p[getCol('img')] || ''}" class="w-full h-full object-cover opacity-30 group-hover:opacity-70 transition">
+                                <div class="absolute inset-0 flex items-center justify-center font-black uppercase text-center px-4">${p[getCol('part_num')]}</div>
+                            </div>`).join('')}
+                        </div>
+                    </div>
+                </div></div>`;
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById('view-detail').classList.add('active');
+        }
+
+        function renderPartSpecs(id) {
+            const res = db.exec(`SELECT * FROM parts WHERE id=${id}`)[0];
+            let r = {}; res.columns.forEach((col, i) => r[col] = res.values[0][i]);
+            const unit = (parseFloat(r.bulk_cost) / (parseInt(r.bulk_qty) || 1)).toFixed(2);
+            document.getElementById('view-detail').innerHTML = `
+                <div class="max-w-6xl mx-auto bg-slate-950 border border-slate-800 flex shadow-2xl border-l-8 border-l-blue-600">
+                    <div class="w-1/2 bg-black flex items-center relative"><img src="${r.img}" class="w-full h-full object-contain"><button onclick="renderDetail(currentProjectId)" class="absolute top-6 left-6 bg-blue-600 p-4 font-black">BACK</button></div>
+                    <div class="p-12 w-1/2 space-y-8">
+                        <div class="flex justify-between items-start"><div><h2 class="text-5xl font-black uppercase italic underline decoration-blue-600 decoration-4">${r.part_num}</h2><p class="text-zinc-500 mt-4 text-sm font-bold border-l-2 border-zinc-800 pl-4">${r.desc||'--'}</p></div><button onclick="openPartModal(${r.id})" class="text-blue-500 text-[10px] font-black uppercase">Revise</button></div>
+                        <div class="grid grid-cols-3 gap-4">
+                            <div class="bg-slate-900 p-6 border border-slate-800"><label>Required</label><div class="text-2xl font-black text-blue-500">${r.req}</div></div>
+                            <div class="bg-slate-900 p-6 border border-slate-800"><label>Unit $</label><div class="text-2xl font-black text-emerald-400">$${unit}</div></div>
+                        </div>
+                        <div class="space-y-3 pt-4">
+                            ${r.links ? `<a href="${r.links}" target="_blank" class="block bg-slate-900 p-4 border border-zinc-800 text-blue-400 text-xs font-black uppercase text-center">🔗 Source</a>` : ''}
+                            ${r.cad_link ? `<a href="${r.cad_link}" target="_blank" class="block bg-slate-900 p-4 border border-zinc-800 text-orange-400 text-xs font-black uppercase text-center">📐 CAD_FILE</a>` : ''}
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        function openPartModal(partId) {
+            let p = { id: null, part_num: "", img: "", req: 1, stock: 0, desc: "", bulk_cost: 0, bulk_qty: 1, links: "", cad_link: "" };
+            if (partId) {
+                const res = db.exec(`SELECT * FROM parts WHERE id=${partId}`)[0];
+                res.columns.forEach((col, i) => p[col] = res.values[0][i]);
+            }
+            document.getElementById('modalContent').innerHTML = `
+                <h2 class="text-3xl font-black uppercase mb-8 text-blue-500 underline">Part_Specification</h2>
+                <div class="grid grid-cols-2 gap-10">
+                    <div class="space-y-4 text-white">
+                        <label>Part Reference</label><input type="text" id="m_num" value="${p.part_num}" class="spec-input font-bold uppercase">
+                        <label>Image URL</label><input type="text" id="m_img" value="${p.img}" class="spec-input">
+                        <label>CAD Link</label><input type="text" id="m_cad" value="${p.cad_link}" class="spec-input">
+                        <label>Notes</label><textarea id="m_desc" class="spec-input h-24">${p.desc}</textarea>
+                    </div>
+                    <div class="space-y-4 text-white">
+                        <div class="bg-slate-900 p-6 border border-slate-800 space-y-4">
+                            <label class="text-blue-500 font-black italic text-[9px]">Financials</label>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div><label>Total Price ($)</label><input type="number" step="0.01" id="m_cost" value="${p.bulk_cost}" class="spec-input"></div>
+                                <div><label>Bulk Qty</label><input type="number" id="m_qty" value="${p.bulk_qty}" class="spec-input"></div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4 text-white">
+                            <div><label>Required</label><input type="number" id="m_req" value="${p.req}" class="spec-input"></div>
+                            <div><label>Stock</label><input type="number" id="m_stock" value="${p.stock}" class="spec-input"></div>
+                        </div>
+                        <label>Source Link</label><input type="text" id="m_link" value="${p.links}" class="spec-input">
+                    </div>
+                </div>
+                <div class="flex gap-4 mt-10 pt-8 border-t border-slate-800">
+                    <button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-black uppercase">Abort</button>
+                    <button onclick="commitPart(${p.id})" class="flex-1 bg-blue-600 py-4 font-black text-white uppercase italic">Commit_Data</button>
+                </div>`;
+            toggleModal(true);
+        }
+
+        async function commitPart(id) {
+            const vals = {
+                num: document.getElementById('m_num').value, img: document.getElementById('m_img').value,
+                desc: document.getElementById('m_desc').value, link: document.getElementById('m_link').value,
+                cad: document.getElementById('m_cad').value, cost: parseFloat(document.getElementById('m_cost').value) || 0,
+                qty: parseInt(document.getElementById('m_qty').value) || 1, req: parseInt(document.getElementById('m_req').value) || 1,
+                stock: parseInt(document.getElementById('m_stock').value) || 0
+            };
+            if (id) {
+                db.run(`UPDATE parts SET part_num=?, img=?, req=?, stock=?, desc=?, links=?, bulk_cost=?, bulk_qty=?, cad_link=? WHERE id=?`, 
+                       [vals.num, vals.img, vals.req, vals.stock, vals.desc, vals.link, vals.cost, vals.qty, vals.cad, id]);
+            } else {
+                const hash = 'SN-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+                db.run(`INSERT INTO parts (project_id, part_num, img, req, stock, desc, links, bulk_cost, bulk_qty, cad_link, part_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, 
+                       [currentProjectId, vals.num, vals.img, vals.req, vals.stock, vals.desc, vals.link, vals.cost, vals.qty, vals.cad, hash]);
+            }
+            await persist(); toggleModal(false); renderDetail(currentProjectId);
+        }
+
+        function addProject() { const n = prompt("Name:"); if(n) { db.run("INSERT INTO projects (name) VALUES (?)", [n]); persist().then(renderVault); } }
+        function toggleModal(s) { document.getElementById('modalContainer').classList.toggle('hidden', !s); }
+        init();
+    </script>
+</body>
+</html>
