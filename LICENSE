@@ -1,0 +1,33 @@
+FOUNDRY SOURCE LICENSE (FSL) v1.0
+
+Copyright (c) 2026 FOUNDRY SYSTEMS
+
+1. GRANT OF LICENSE
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to use, copy, modify, merge, and redistribute the Software for Personal, Educational, and Internal Business Purposes, subject to the conditions and restrictions below.
+
+2. DEFINITIONS
+   A. "Internal Business Purposes" means the use of the Software by the Licensee to perform the Licensee’s own internal operations.
+   B. "Authorized Personnel" means the Licensee’s employees and contractors, provided those contractors are accessing the Software exclusively to perform work on behalf of the Licensee.
+   C. "Third Party" means any entity, person, or organization other than the Licensee and its Authorized Personnel.
+
+3. RESTRICTIONS
+The permissions granted above are strictly subject to the following restrictions:
+
+   A. NO COMMERCIAL DISTRIBUTION:
+   You may not sell, rent, lease, or sublicense the Software, or any derivative works or modifications of the Software, in exchange for fees. Free redistribution is permitted, provided all attribution and trademark conditions are met.
+
+   B. NO COMPETING SAAS / MANAGED SERVICE:
+   You may not deploy, host, or provide the Software (or any derivative works) to Third Parties as a managed service, hosted service, Software-as-a-Service (SaaS), or platform where Third Parties access the Software over a network. 
+   
+   (Exception: Hosting the Software on an internal network for access solely by Authorized Personnel for Internal Business Purposes is expressly permitted.)
+
+   C. TRADEMARK PROTECTION:
+   This license does not grant any rights to use the Licensor’s trademarks, service marks, or product names (e.g., "FOUNDRY"). Derivative works must not use the name "Foundry" or any confusingly similar designation without express written permission. If you fork the project for public distribution, you must remove all "Foundry" branding.
+
+4. PERMITTED SERVICES (CONSULTING)
+Charging fees for services related to the Software—including installation, configuration, customization, training, or support—is permitted, provided that:
+   (i) The Software itself is not sold; and
+   (ii) The deployment complies with Section 3 (Restrictions).
+
+5. DISCLAIMER
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY.
