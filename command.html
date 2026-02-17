@@ -8,36 +8,109 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
         body { font-family: 'JetBrains+Mono', monospace; background-color: #020617; color: #f8fafc; }
+        .tab-btn { transition: all 0.2s ease; border-bottom: 2px solid transparent; opacity: 0.5; }
+        .tab-btn.active { border-bottom: 2px solid #3b82f6; color: #3b82f6; opacity: 1; }
+        .view { display: none; }
+        .view.active { display: block; }
         label { font-size: 9px; font-weight: 900; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 4px; }
+        .pipeline-card { background: #09090b; border: 1px solid #1e293b; border-left: 4px solid #f59e0b; padding: 1.5rem; margin-bottom: 1rem; }
+        .ship-card { background: #09090b; border: 1px solid #1e293b; border-left: 4px solid #10b981; padding: 1.5rem; margin-bottom: 1rem; }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .price-focus { background: #000; border: 1px solid #3b82f6; color: #3b82f6; padding: 10px; font-size: 2rem; font-weight: 900; outline: none; width: 100%; }
     </style>
 </head>
 <body class="p-10">
-    <header class="flex justify-between items-end mb-12 border-b border-zinc-800 pb-8 text-white">
+    <header class="flex justify-between items-end mb-8 border-b border-zinc-800 pb-8">
         <div>
-            <h1 class="text-[10px] font-black text-blue-500 uppercase tracking-[0.4em] mb-2">Foundry_Command</h1>
-            <h2 id="proj-name" class="text-6xl font-black uppercase italic tracking-tighter">Loading...</h2>
+            <h1 class="text-[10px] font-black text-blue-500 uppercase tracking-[0.4em] mb-2">Command_&_Analytics</h1>
+            <h2 id="proj-name" class="text-4xl font-black uppercase italic tracking-tighter text-white">FOUNDRY_SYSTEM</h2>
         </div>
-        <div class="text-right">
-            <a href="/index.html" class="text-zinc-500 text-[10px] font-black uppercase tracking-widest">Back_to_Vault</a>
-        </div>
+        <nav class="flex gap-8">
+            <button onclick="switchTab('intel')" id="btn-intel" class="tab-btn active pb-2 text-[10px] font-black uppercase">Intelligence</button>
+            <button onclick="switchTab('ops')" id="btn-ops" class="tab-btn pb-2 text-[10px] font-black uppercase">Operations</button>
+            <button onclick="switchTab('log')" id="btn-log" class="tab-btn pb-2 text-[10px] font-black uppercase text-emerald-500">Logistics</button>
+            <button onclick="switchTab('fin')" id="btn-fin" class="tab-btn pb-2 text-[10px] font-black uppercase">Financials</button>
+            <a href="/index.html" class="ml-4 text-zinc-500 text-[10px] font-black uppercase hover:text-white transition tracking-widest">Exit_Vault</a>
+        </nav>
     </header>
 
-    <div class="grid grid-cols-4 gap-6 mb-12">
-        <div class="bg-zinc-900 border border-zinc-800 p-8"><label>Build_Capacity</label><div id="build-capacity" class="text-5xl font-black text-white italic">0</div></div>
-        <div class="bg-zinc-900 border border-zinc-800 p-8"><label>Unit_COGS</label><div id="unit-cost" class="text-5xl font-black text-emerald-400 italic">$0.00</div></div>
-        <div class="bg-zinc-900 border border-zinc-800 p-8"><label>Bottleneck</label><div id="critical-part" class="text-xl font-black text-orange-500 uppercase mt-4 italic">Healthy</div></div>
-        <div class="bg-zinc-900 border border-zinc-800 p-8 flex flex-col justify-between"><label>Market_Ops</label><button onclick="sellUnit()" class="w-full bg-blue-600 text-white font-black py-4 uppercase italic text-xs tracking-widest shadow-lg shadow-blue-900/20">Register_Sale</button></div>
+    <div id="view-intel" class="view active">
+        <div class="grid grid-cols-4 gap-6 mb-12">
+            <div class="bg-zinc-900 border border-zinc-800 p-8">
+                <label>System_Runway</label>
+                <div id="build-capacity" class="text-5xl font-black italic text-white">0</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 p-8">
+                <label>Unit_Production_Cost</label>
+                <div id="unit-cost" class="text-5xl font-black text-zinc-400 italic">$0.00</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 p-8 border-l-4 border-l-emerald-600">
+                <label>Finished_Goods_Inventory</label>
+                <div id="project-stock" class="text-5xl font-black text-emerald-500 italic">0</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 p-8 border-l-4 border-l-blue-600">
+                <label>Unit_MSRP</label>
+                <div class="flex items-center gap-2">
+                    <span class="text-2xl font-black text-blue-500">$</span>
+                    <input type="number" id="target-price" step="0.01" onchange="updateTargetPrice(this.value)" class="price-focus" placeholder="0.00">
+                </div>
+            </div>
+        </div>
+        <div id="analytics-table" class="bg-zinc-900 border border-zinc-800"></div>
     </div>
 
-    <div class="bg-zinc-900 border border-zinc-800 overflow-hidden">
-        <div class="bg-zinc-800/50 p-4 border-b border-zinc-700 grid grid-cols-6 gap-4 text-[10px] font-black uppercase tracking-widest text-zinc-400">
-            <div>Component</div><div class="text-center">Stock / Req</div><div class="text-center">Runway</div><div class="text-center">Lead_Time</div><div class="text-center">Priority</div><div class="text-right">Restock</div>
+    <div id="view-ops" class="view">
+        <div class="grid grid-cols-2 gap-10">
+            <div class="space-y-6">
+                <h3 class="text-xl font-black uppercase italic text-blue-500 tracking-widest">Transaction_Entry</h3>
+                <div class="bg-zinc-900 border border-zinc-800 p-8 space-y-6">
+                    <div>
+                        <label>Order_Quantity</label>
+                        <input type="number" id="order-qty" value="1" min="1" class="w-full bg-black border border-zinc-800 p-4 text-4xl font-black text-white outline-none">
+                    </div>
+                    <button onclick="registerSale()" class="w-full bg-blue-600 p-5 font-black uppercase italic text-sm tracking-widest hover:bg-blue-500 transition">Register_Sale_&_Open_Ticket</button>
+                    <div class="bg-black/50 p-4 border border-zinc-800 text-[9px] uppercase font-black text-zinc-600">
+                        * Registering a sale logs revenue and creates a fulfillment ticket in Logistics.
+                    </div>
+                </div>
+            </div>
+            <div>
+                <h3 class="text-xl font-black uppercase italic text-orange-500 tracking-widest mb-6">Production_Pipeline</h3>
+                <div id="pipeline-list"></div>
+            </div>
         </div>
-        <div id="analytics-table" class="divide-y divide-zinc-800"></div>
+    </div>
+
+    <div id="view-log" class="view">
+        <div class="max-w-4xl mx-auto">
+            <h3 class="text-xl font-black uppercase italic text-emerald-500 tracking-widest mb-6">Pending_Fulfillment</h3>
+            <div id="shipping-list" class="space-y-4">
+                </div>
+        </div>
+    </div>
+
+    <div id="view-fin" class="view">
+        <div class="grid grid-cols-3 gap-6 mb-10">
+            <div class="bg-zinc-900 border border-zinc-800 p-8 border-t-4 border-t-emerald-500">
+                <label>Gross_Revenue</label>
+                <div id="total-earn" class="text-5xl font-black text-emerald-500">$0.00</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 p-8 border-t-4 border-t-red-600">
+                <label>Total_Burn</label>
+                <div id="total-burn" class="text-5xl font-black text-red-500">$0.00</div>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 p-8 border-t-4 border-t-white">
+                <label>Net_Profit</label>
+                <div id="net-profit" class="text-5xl font-black text-white">$0.00</div>
+            </div>
+        </div>
     </div>
 
     <script>
         let db, SQL, currentProjectId;
+        let workOrders = [], shippingTickets = [], salesHistory = [], purchaseHistory = [];
+        let unitCOGS = 0;
+
         async function init() {
             const urlParams = new URLSearchParams(window.location.search);
             currentProjectId = urlParams.get('id');
@@ -45,43 +118,130 @@
             const res = await fetch('/get_db');
             const buf = await res.arrayBuffer();
             db = new SQL.Database(new Uint8Array(buf));
+            
+            const check = db.exec(`SELECT id FROM parts WHERE project_id=${currentProjectId} AND part_num='FINISHED_PRODUCT'`);
+            if (!check[0]) {
+                db.run(`INSERT INTO parts (project_id, part_num, stock, req, part_hash, sale_price) VALUES (?, 'FINISHED_PRODUCT', 0, 0, 'MASTER', 0.00)`, [currentProjectId]);
+                await persist();
+            }
+
+            salesHistory = JSON.parse(localStorage.getItem(`sales_${currentProjectId}`) || '[]');
+            purchaseHistory = JSON.parse(localStorage.getItem(`purchases_${currentProjectId}`) || '[]');
+            workOrders = JSON.parse(localStorage.getItem(`builds_${currentProjectId}`) || '[]');
+            shippingTickets = JSON.parse(localStorage.getItem(`ship_${currentProjectId}`) || '[]');
+
+            const priceRes = db.exec(`SELECT sale_price FROM parts WHERE project_id=${currentProjectId} AND part_num='FINISHED_PRODUCT' LIMIT 1`);
+            if(priceRes[0] && priceRes[0].values[0][0]) document.getElementById('target-price').value = parseFloat(priceRes[0].values[0][0]).toFixed(2);
+
             renderCommand();
         }
 
-        async function persist() { await fetch('/save_db', { method: 'POST', body: db.export() }); renderCommand(); }
+        async function persist() {
+            await fetch('/save_db', { method: 'POST', body: db.export() });
+            localStorage.setItem(`sales_${currentProjectId}`, JSON.stringify(salesHistory));
+            localStorage.setItem(`purchases_${currentProjectId}`, JSON.stringify(purchaseHistory));
+            localStorage.setItem(`builds_${currentProjectId}`, JSON.stringify(workOrders));
+            localStorage.setItem(`ship_${currentProjectId}`, JSON.stringify(shippingTickets));
+            renderCommand();
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('view-' + tab).classList.add('active');
+            document.getElementById('btn-' + tab).classList.add('active');
+            renderCommand();
+        }
 
         function renderCommand() {
-            const projRes = db.exec(`SELECT name FROM projects WHERE id=${currentProjectId}`);
-            document.getElementById('proj-name').innerText = projRes[0].values[0][0];
             const partRes = db.exec(`SELECT * FROM parts WHERE project_id=${currentProjectId}`);
             const parts = partRes[0] ? partRes[0].values : [];
             const cols = partRes[0] ? partRes[0].columns : [];
             const get = (row, name) => row[cols.indexOf(name)];
-            let totalCost = 0, minRunway = Infinity, criticalPart = "HEALTHY", tableHtml = "";
+            
+            unitCOGS = 0;
+            let minRunway = Infinity, projectStock = 0, tableHtml = "";
 
             parts.forEach(p => {
-                const stock = parseInt(get(p, 'stock')) || 0, req = parseInt(get(p, 'req')) || 1, leadTime = get(p, 'lead_time') || 7;
-                const unitCost = (parseFloat(get(p, 'bulk_cost')) / (parseInt(get(p, 'bulk_qty')) || 1)), runway = Math.floor(stock / req);
-                totalCost += (unitCost * req);
-                if (runway < minRunway) { minRunway = runway; criticalPart = get(p, 'part_num'); }
-                let priorityColor = (runway < 1) ? "text-red-500 animate-pulse" : (runway < 2) ? "text-orange-500" : "text-emerald-500";
-                tableHtml += `<div class="grid grid-cols-6 gap-4 p-6 items-center border-b border-zinc-800"><div class="font-bold text-white uppercase tracking-tighter">${get(p, 'part_num')}</div><div class="text-center font-bold text-zinc-400">${stock} / ${req}</div><div class="text-center font-black ${priorityColor}">${runway} Units</div><div class="text-center"><input type="number" onchange="updateLeadTime(${get(p, 'id')}, this.value)" value="${leadTime}" class="bg-black border border-zinc-800 text-center w-16 p-1 text-xs text-white"></div><div class="text-center text-[10px] font-black uppercase italic ${priorityColor}">${runway < 1 ? 'REORDER' : 'OK'}</div><div class="text-right"><button onclick="addStock(${get(p, 'id')}, ${get(p, 'bulk_qty')})" class="text-[9px] font-black text-blue-500 uppercase border border-blue-500/20 px-3 py-1 hover:bg-blue-600 hover:text-white">Restock</button></div></div>`;
+                const pNum = get(p, 'part_num');
+                if (pNum === 'FINISHED_PRODUCT') { projectStock = parseInt(get(p, 'stock')) || 0; return; }
+                const stock = parseInt(get(p, 'stock')) || 0, req = parseInt(get(p, 'req')) || 1;
+                const unitCost = (parseFloat(get(p, 'bulk_cost')) || 0) / (parseInt(get(p, 'bulk_qty')) || 1);
+                const runway = Math.floor(stock / req);
+                unitCOGS += (unitCost * req);
+                if (runway < minRunway) minRunway = runway;
+                tableHtml += `<div class="grid grid-cols-6 gap-4 p-4 border-b border-zinc-800 items-center text-xs"><div class="font-black uppercase text-white tracking-widest">${pNum}</div><div class="text-center text-zinc-500">${stock} / ${req}</div><div class="text-center font-black">${runway} U</div><div class="text-center font-bold text-zinc-600">LT: ${get(p, 'lead_time') || 7}D</div><div class="text-center uppercase font-black italic text-[9px] ${runway < 1 ? 'text-red-500' : 'text-emerald-500'}">${runway < 1 ? 'Shortage' : 'OK'}</div><div class="text-right"><button onclick="addStock(${get(p, 'id')}, ${get(p, 'bulk_qty')}, ${get(p, 'bulk_cost')})" class="text-[9px] font-black text-blue-500 border border-blue-500/20 px-3 py-1">Restock</button></div></div>`;
             });
 
-            document.getElementById('analytics-table').innerHTML = tableHtml;
-            document.getElementById('unit-cost').innerText = `$${totalCost.toFixed(2)}`;
-            document.getElementById('build-capacity').innerText = minRunway === Infinity ? 0 : minRunway;
-            document.getElementById('critical-part').innerText = minRunway < 2 ? criticalPart : "HEALTHY";
-            document.getElementById('critical-part').className = minRunway < 2 ? "text-xl font-black text-red-500 uppercase mt-4 italic" : "text-xl font-black text-emerald-500 uppercase mt-4 italic";
+            document.getElementById('analytics-table').innerHTML = tableHtml || '<div class="p-8 text-zinc-600 italic">No Components Registered.</div>';
+            document.getElementById('project-stock').innerText = projectStock;
+            document.getElementById('unit-cost').innerText = `$${unitCOGS.toFixed(2)}`;
+            document.getElementById('build-capacity').innerText = (minRunway === Infinity) ? 0 : minRunway;
+
+            // Pipeline Render
+            document.getElementById('pipeline-list').innerHTML = workOrders.map((w, idx) => `
+                <div class="pipeline-card">
+                    <div class="flex justify-between text-[10px] font-black mb-3 text-zinc-500 uppercase tracking-widest"><span>BUILD_SEQ #${idx+1}</span><span>${w.qty} U</span></div>
+                    <button onclick="finalizeBuild(${idx})" class="w-full bg-orange-600 text-white py-3 text-[10px] font-black uppercase">Finalize_&_Deduct_Parts</button>
+                </div>
+            `).join('') || '<div class="text-zinc-800 font-black italic text-xs uppercase p-4 border border-zinc-900 border-dashed">No Active Builds</div>';
+
+            // Shipping Render
+            document.getElementById('shipping-list').innerHTML = shippingTickets.map((s, idx) => `
+                <div class="ship-card">
+                    <div class="flex justify-between text-[10px] font-black mb-3 text-emerald-500 uppercase tracking-widest"><span>SHIPPING_TICKET #${idx+1}</span><span>QTY: ${s.qty}</span></div>
+                    <div class="text-xs text-zinc-400 mb-4 font-bold uppercase tracking-widest">Status: ${projectStock >= s.qty ? 'READY_TO_SHIP' : 'AWAITING_STOCK'}</div>
+                    <button onclick="authorizeShip(${idx})" class="w-full ${projectStock >= s.qty ? 'bg-emerald-600' : 'bg-zinc-800 pointer-events-none opacity-20'} text-white py-3 text-[10px] font-black uppercase">Authorize_Shipment_&_Close_Ticket</button>
+                </div>
+            `).join('') || '<div class="text-zinc-800 font-black italic text-xs uppercase p-4">No Pending Shipments</div>';
+
+            const revenue = salesHistory.reduce((a, b) => a + b, 0);
+            const burn = purchaseHistory.reduce((a, b) => a + b, 0);
+            document.getElementById('total-earn').innerText = `$${revenue.toFixed(2)}`;
+            document.getElementById('total-burn').innerText = `$${burn.toFixed(2)}`;
+            document.getElementById('net-profit').innerText = `$${(revenue - burn).toFixed(2)}`;
         }
 
-        function addStock(id, qty) { db.run(`UPDATE parts SET stock = stock + ? WHERE id = ?`, [qty, id]); persist(); }
-        function updateLeadTime(id, val) { db.run(`UPDATE parts SET lead_time = ? WHERE id = ?`, [val, id]); persist(); }
-        function sellUnit() {
-            const res = db.exec(`SELECT id, stock, req FROM parts WHERE project_id=${currentProjectId}`);
-            const parts = res[0] ? res[0].values : [];
-            if (parts.every(p => p[1] >= p[2])) { parts.forEach(p => db.run(`UPDATE parts SET stock = stock - ? WHERE id = ?`, [p[2], p[0]])); persist(); } else { alert("STOCK_LOW"); }
+        function registerSale() {
+            const qty = parseInt(document.getElementById('order-qty').value) || 1;
+            const price = parseFloat(document.getElementById('target-price').value) || 0;
+            if (price <= 0) return alert("SET_MSRP_FIRST");
+            
+            salesHistory.push(price * qty);
+            shippingTickets.push({ qty: qty, date: new Date().toLocaleDateString() });
+            
+            // Check if we need to auto-trigger a build order
+            const res = db.exec(`SELECT stock FROM parts WHERE project_id=${currentProjectId} AND part_num='FINISHED_PRODUCT'`);
+            const stock = res[0] ? res[0].values[0][0] : 0;
+            if (stock < qty) {
+                if(confirm("INSUFFICIENT_STOCK: Create build order for this sale?")) {
+                    workOrders.push({ qty: qty, date: new Date().toLocaleDateString() });
+                }
+            }
+            persist();
         }
+
+        function finalizeBuild(idx) {
+            const wo = workOrders[idx];
+            const res = db.exec(`SELECT id, stock, req FROM parts WHERE project_id=${currentProjectId} AND part_num != 'FINISHED_PRODUCT'`);
+            const parts = res[0].values;
+            if (parts.every(p => p[1] >= (p[2] * wo.qty))) {
+                parts.forEach(p => db.run(`UPDATE parts SET stock = stock - ? WHERE id = ?`, [(p[2] * wo.qty), p[0]]));
+                db.run(`UPDATE parts SET stock = stock + ? WHERE project_id = ? AND part_num = 'FINISHED_PRODUCT'`, [wo.qty, currentProjectId]);
+                workOrders.splice(idx, 1);
+                persist();
+            } else { alert("SHORTAGE_IN_VAULT"); }
+        }
+
+        function authorizeShip(idx) {
+            const ticket = shippingTickets[idx];
+            db.run(`UPDATE parts SET stock = stock - ? WHERE project_id = ? AND part_num = 'FINISHED_PRODUCT'`, [ticket.qty, currentProjectId]);
+            shippingTickets.splice(idx, 1);
+            persist();
+        }
+
+        function updateTargetPrice(val) { db.run(`UPDATE parts SET sale_price = ? WHERE project_id = ? AND part_num = 'FINISHED_PRODUCT'`, [val, currentProjectId]); persist(); }
+        function addStock(id, qty, cost) { db.run(`UPDATE parts SET stock = stock + ? WHERE id = ?`, [qty, id]); purchaseHistory.push(cost); persist(); }
         init();
     </script>
 </body>
