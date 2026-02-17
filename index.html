@@ -16,7 +16,7 @@
 </head>
 <body>
     <header class="h-16 border-b border-zinc-800 flex justify-between items-center bg-slate-950 px-6 shrink-0 z-50 text-white">
-        <h1 class="font-black tracking-tighter text-2xl cursor-pointer" onclick="location.href='/index.html'">FOUNDRY_VAULT</h1>
+        <h1 class="font-black tracking-tighter text-2xl cursor-pointer" onclick="navigateWithSave('/index.html')">FOUNDRY_VAULT</h1>
         <div id="sync-indicator" class="text-[10px] font-bold text-zinc-500 uppercase italic">System_Ready</div>
     </header>
 
@@ -57,11 +57,30 @@
             renderVault();
         }
 
+        // IMPROVED PERSISTENCE WITH KEEPALIVE
         async function persist() {
+            if (!db) return;
             const data = db.export();
-            await fetch('/save_db', { method: 'POST', body: data });
-            document.getElementById('sync-indicator').innerText = "SYNC_COMPLETE";
-            setTimeout(() => document.getElementById('sync-indicator').innerText = "System_Ready", 2000);
+            try {
+                // Pointing to /upload_db per your app.py
+                await fetch('/upload_db', { 
+                    method: 'POST', 
+                    body: data,
+                    keepalive: true 
+                });
+                document.getElementById('sync-indicator').innerText = "SYNC_COMPLETE";
+                setTimeout(() => document.getElementById('sync-indicator').innerText = "System_Ready", 2000);
+            } catch (err) {
+                console.error("Critical Sync Failure", err);
+                document.getElementById('sync-indicator').innerText = "SYNC_FAILED";
+            }
+        }
+
+        // NAVIGATION GUARD
+        async function navigateWithSave(url) {
+            document.getElementById('sync-indicator').innerText = "SAVING_BEFORE_EXIT...";
+            await persist();
+            window.location.href = url;
         }
 
         function renderVault() {
@@ -95,8 +114,8 @@
                     <div class="w-72 space-y-4">
                         <button onclick="renderVault()" class="text-zinc-500 text-[10px] font-black uppercase tracking-widest hover:text-white transition">← Root</button>
                         <div class="bg-slate-900 border border-slate-800 p-6 shadow-xl"><label>Valuation</label><div class="text-3xl font-black text-emerald-400">$${total.toFixed(2)}</div></div>
-                        <a href="/production.html?id=${pId}" class="block text-center bg-orange-600/10 border border-orange-600 text-orange-500 py-3 text-[10px] font-black uppercase italic tracking-widest">{ MANUFACTURING_OPS }</a>
-                        <a href="/command.html?id=${pId}" class="block text-center bg-blue-600/10 border border-blue-600 text-blue-500 py-3 text-[10px] font-black uppercase italic tracking-widest">{ COMMAND_&_ANALYTICS }</a>
+                        <button onclick="navigateWithSave('/production.html?id=${pId}')" class="w-full text-center bg-orange-600/10 border border-orange-600 text-orange-500 py-3 text-[10px] font-black uppercase italic tracking-widest">{ MANUFACTURING_OPS }</button>
+                        <button onclick="navigateWithSave('/command.html?id=${pId}')" class="w-full text-center bg-blue-600/10 border border-blue-600 text-blue-500 py-3 text-[10px] font-black uppercase italic tracking-widest">{ COMMAND_&_ANALYTICS }</button>
                         <button onclick="openPartModal(null)" class="w-full bg-zinc-100 text-zinc-950 py-3 text-[10px] font-black uppercase">Add_Part</button>
                     </div>
                     <div class="flex-1">
@@ -190,8 +209,16 @@
             await persist(); toggleModal(false); renderDetail(currentProjectId);
         }
 
-        function addProject() { const n = prompt("Name:"); if(n) { db.run("INSERT INTO projects (name) VALUES (?)", [n]); persist().then(renderVault); } }
+        function addProject() { 
+            const n = prompt("Name:"); 
+            if(n) { 
+                db.run("INSERT INTO projects (name) VALUES (?)", [n]); 
+                persist().then(renderVault); 
+            } 
+        }
+        
         function toggleModal(s) { document.getElementById('modalContainer').classList.toggle('hidden', !s); }
+        
         init();
     </script>
 </body>
