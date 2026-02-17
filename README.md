@@ -2,7 +2,7 @@
 
 **A Lightweight Manufacturing Execution System (MES) & BOM Manager.**
 
-FOUNDRY is a local, browser-based ecosystem designed for managing Bills of Materials, visual production routing, inventory logic, and financial analytics for small-scale manufacturing and prototyping. It operates on a "Zero-Cloud" philosophy—all data resides locally in a portable SQLite database.
+FOUNDRY is a local, browser-based ecosystem designed for managing Bills of Materials, visual production routing, inventory logic, and financial analytics for small-scale manufacturing and prototyping. It currenty operates on a "Zero-Cloud" philosophy—all data resides locally in a portable SQLite database.
 
 ---
 
