@@ -10,18 +10,23 @@
         body { font-family: 'JetBrains+Mono', monospace; background-color: #020617; color: #f8fafc; overflow: hidden; }
         .canvas-area { width: 5000px; height: 5000px; background-image: radial-gradient(#1e293b 1px, transparent 1px); background-size: 40px 40px; position: relative; }
         #svg-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
-        .node { position: absolute; min-width: 220px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; padding: 12px; z-index: 10; cursor: grab; border-top: 4px solid #3b82f6; transition: min-height 0.2s ease; }
+        .node { position: absolute; min-width: 200px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; padding: 12px; z-index: 10; cursor: grab; border-top: 4px solid #3b82f6; transition: min-height 0.2s ease; }
         .type-process { border-top-color: #f59e0b; }
+        .type-final { border-top-color: #10b981; }
         .socket { width: 14px; height: 14px; background: #1e293b; border: 2px solid #334155; border-radius: 50%; position: absolute; cursor: crosshair; z-index: 30; }
         .socket:hover, .socket.active { background: #3b82f6; box-shadow: 0 0 10px #3b82f6; }
         .socket-out { right: -8px; top: 35px; }
         .socket-in { left: -8px; }
         .hud-panel { position: absolute; top: 20px; left: 20px; width: 260px; background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(10px); border: 1px solid #334155; padding: 15px; z-index: 100; border-radius: 8px; }
+        .qty-badge { position: absolute; top: -12px; right: -12px; background: #ef4444; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 900; border: 2px solid #0f172a; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.5); z-index: 40; pointer-events: none; }
+        .part-btn { background: #1e293b; border: 1px solid #334155; padding: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; cursor: pointer; transition: all 0.2s; position: relative; width: 100%; text-align: left; margin-bottom: 4px; }
+        .part-btn:hover:not(.disabled) { border-color: #3b82f6; background: #3b82f620; }
+        .part-btn.disabled { opacity: 0.3; cursor: not-allowed; border-color: #ef4444; }
     </style>
 </head>
 <body>
     <aside class="hud-panel">
-        <h3 class="text-[10px] font-black text-blue-500 uppercase mb-4 tracking-widest">Foundry_Ops</h3>
+        <h3 class="text-[10px] font-black text-blue-500 uppercase mb-4 tracking-widest">Available_Inventory</h3>
         <div id="router-part-list" class="space-y-2 mb-4 max-h-96 overflow-y-auto"></div>
         <div class="border-t border-slate-700 pt-4 space-y-2">
             <button onclick="addProcessNode()" class="w-full bg-amber-600/20 text-amber-500 py-2 text-[10px] font-bold uppercase border border-amber-600">Add_Process</button>
@@ -36,12 +41,15 @@
         </div>
     </div>
 
-    <div id="modalContainer" class="hidden fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex items-center justify-center p-4"><div id="modalContent" class="bg-slate-950 border border-slate-800 w-full max-w-2xl p-10 border-t-4 border-t-amber-600"></div></div>
+    <div id="modalContainer" class="hidden fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div id="modalContent" class="bg-slate-950 border border-slate-800 w-full max-w-2xl p-10 border-t-4 border-t-blue-600 shadow-2xl text-white"></div>
+    </div>
 
     <script>
         let db, SQL, currentProjectId, sourceSocketId = null;
         let connections = [], moveDetected = false;
         let selectedWireIndex = null, selectedNodeId = null;
+        let bomRequirements = {}; 
 
         async function init() {
             const urlParams = new URLSearchParams(window.location.search);
@@ -50,61 +58,196 @@
             const res = await fetch('/get_db');
             const buf = await res.arrayBuffer();
             db = new SQL.Database(new Uint8Array(buf));
-            const parts = db.exec(`SELECT part_hash, part_num, img FROM parts WHERE project_id=${currentProjectId}`)[0]?.values || [];
-            document.getElementById('router-part-list').innerHTML = parts.map(p => `<div onclick="spawnNode('part', 400, 300, '${p[1]}', '${p[2]}', 'hash_${p[0]}')" class="bg-slate-800 border border-slate-700 p-3 text-xs font-bold uppercase cursor-pointer hover:border-blue-500 transition">${p[1]}</div>`).join('');
             
+            const parts = db.exec(`SELECT part_hash, part_num, req, img FROM parts WHERE project_id=${currentProjectId} AND part_num != 'FINISHED_PRODUCT'`)[0]?.values || [];
+            parts.forEach(p => { bomRequirements[p[0]] = { name: p[1], total: parseInt(p[2]), img: p[3] }; });
+
             window.addEventListener('keydown', (e) => {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
                 if (e.key === 'Delete' || e.key === 'Backspace') {
-                    if (selectedWireIndex !== null) { connections.splice(selectedWireIndex, 1); selectedWireIndex = null; drawWires(); saveLayout(); } 
-                    else if (selectedNodeId && !selectedNodeId.startsWith('f_')) { removeNode(selectedNodeId); selectedNodeId = null; saveLayout(); }
+                    if (selectedWireIndex !== null) { 
+                        const conn = connections[selectedWireIndex];
+                        const targetNode = conn.tn;
+                        connections.splice(selectedWireIndex, 1); 
+                        selectedWireIndex = null; 
+                        cleanupPorts(targetNode);
+                    } 
+                    else if (selectedNodeId && !selectedNodeId.startsWith('f_')) { 
+                        removeNode(selectedNodeId); 
+                    }
                 }
             });
             document.getElementById('router-viewport').addEventListener('mousedown', (e) => { if (e.target.tagName !== 'path' && !e.target.closest('.node')) { selectedWireIndex = null; deselectNodes(); drawWires(); } });
+            
             loadSavedLayout();
+            updateInventoryMenu();
         }
 
-        function deselectNodes() { selectedNodeId = null; document.querySelectorAll('.node').forEach(n => n.style.borderColor = ''); }
+        function cleanupPorts(nodeId) {
+            const inputs = connections.filter(c => c.tn === nodeId);
+            inputs.sort((a, b) => parseInt(a.tid.split('_').pop()) - parseInt(b.tid.split('_').pop()));
 
-        function addProcessNode() {
-            const content = document.getElementById('modalContent');
-            content.innerHTML = `<div class="space-y-6"><h2 class="text-2xl font-black uppercase italic text-amber-500 tracking-tighter">Initialize_Process</h2><select id="processPreset" onchange="document.getElementById('customProcessName').value = this.value" class="w-full bg-zinc-900 border border-zinc-800 p-3 text-sm font-bold uppercase text-white outline-none"><optgroup label="Fabrication"><option value="3D_PRINTING">3D_PRINTING</option><option value="CNC_MACHINING">CNC_MACHINING</option><option value="WELDING_FAB">WELDING_FAB</option></optgroup><optgroup label="Preparation"><option value="ULTRASONIC_CLEAN">ULTRASONIC_CLEAN</option><option value="POWDER_COATING">POWDER_COATING</option></optgroup></select><input type="text" id="customProcessName" placeholder="PROCESS_NAME..." class="w-full bg-zinc-900 border border-zinc-800 p-4 text-xl font-black uppercase text-white outline-none"><div class="flex gap-4"><button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-bold uppercase">Cancel</button><button onclick="confirmProcess()" class="flex-2 bg-amber-600 p-4 font-black uppercase text-white">Deploy</button></div></div>`;
-            toggleModal(true);
-            const input = document.getElementById('customProcessName');
-            input.focus(); input.onkeydown = (e) => { if(e.key === 'Enter') confirmProcess(); };
+            const container = document.getElementById(`in_c_${nodeId}`);
+            if(!container) return;
+            container.innerHTML = '';
+
+            inputs.forEach((conn, idx) => {
+                conn.tid = `in_${nodeId}_${idx}`;
+                const ns = document.createElement('div');
+                ns.className = 'socket socket-in';
+                ns.id = conn.tid;
+                ns.style.top = (35 + (idx * 22)) + 'px';
+                ns.onclick = (e) => handleWire(e, 'in', nodeId, idx);
+                container.appendChild(ns);
+            });
+
+            const emptyIdx = inputs.length;
+            const emptySock = document.createElement('div');
+            emptySock.className = 'socket socket-in';
+            emptySock.id = `in_${nodeId}_${emptyIdx}`;
+            emptySock.style.top = (35 + (emptyIdx * 22)) + 'px';
+            emptySock.onclick = (e) => handleWire(e, 'in', nodeId, emptyIdx);
+            container.appendChild(emptySock);
+
+            document.getElementById(nodeId).style.minHeight = (35 + (emptyIdx * 22) + 40) + "px";
+            drawWires();
+            saveLayout();
         }
 
-        function confirmProcess() { const name = document.getElementById('customProcessName').value.trim(); if (name) { spawnNode('process', 500, 400, name, ''); toggleModal(false); } }
+        function removeNode(id) { 
+            const affectedNodes = [...new Set(connections.filter(c => c.sid.includes(id)).map(c => c.tn))];
+            connections = connections.filter(c => !c.sid.includes(id) && !c.tid.includes(id)); 
+            document.getElementById(id).remove(); 
+            affectedNodes.forEach(nid => cleanupPorts(nid));
+            drawWires(); 
+            updateInventoryMenu(); 
+            saveLayout(); 
+        }
 
-        function spawnNode(type, x, y, label, img, identifier, instr = '') {
-            const nodeId = identifier || 'n_' + Math.random().toString(36).substr(2, 5);
+        function updateInventoryMenu() {
+            const placedCounts = {};
+            document.querySelectorAll('.node[data-type="part"]').forEach(n => {
+                const hash = n.dataset.partHash;
+                const qty = parseInt(n.dataset.qty) || 0;
+                placedCounts[hash] = (placedCounts[hash] || 0) + qty;
+            });
+
+            document.getElementById('router-part-list').innerHTML = Object.entries(bomRequirements).map(([hash, data]) => {
+                const remaining = data.total - (placedCounts[hash] || 0);
+                const isDisabled = remaining <= 0;
+                return `
+                    <button onclick="${isDisabled ? '' : `spawnNode('part', 400, 300, '${data.name}', '${data.img}', null, '', 1, '${hash}')`}" 
+                         class="part-btn ${isDisabled ? 'disabled' : ''}">
+                        <div class="flex justify-between items-center">
+                            <span>${data.name}</span>
+                            <span class="text-[9px] ${remaining > 0 ? 'text-blue-400' : 'text-red-500'} font-black">${remaining} REMAINING</span>
+                        </div>
+                    </button>`;
+            }).join('');
+        }
+
+        function spawnNode(type, x, y, label, img, identifier, instr = '', qty = 1, partHash = '') {
+            const nodeId = identifier || 'n_' + Math.random().toString(36).substr(2, 9);
             if (document.getElementById(nodeId)) return;
+            
             const n = document.createElement('div');
             n.id = nodeId; n.className = `node type-${type}`; n.style.left = x + 'px'; n.style.top = y + 'px';
-            n.dataset.type = type; n.dataset.label = label; n.dataset.instr = instr;
+            Object.assign(n.dataset, { type, label, instr, qty, partHash });
+            
+            // LOGIC CHANGE: Only generate badge for 'part' type
+            const badgeHtml = (type === 'part') ? `<div class="qty-badge" id="qty_${nodeId}">${qty}</div>` : '';
+
             let sockets = (type === 'part') ? `<div class="socket socket-out" id="out_${nodeId}" style="top:35px;" onclick="handleWire(event, 'out', '${nodeId}')"></div>` : `<div class="in-cont" id="in_c_${nodeId}"><div class="socket socket-in" id="in_${nodeId}_0" style="top:35px;" onclick="handleWire(event, 'in', '${nodeId}', 0)"></div></div>` + ((type === 'process') ? `<div class="socket socket-out" id="out_${nodeId}" style="top:35px;" onclick="handleWire(event, 'out', '${nodeId}')"></div>` : '');
-            n.innerHTML = `<div class="text-[8px] text-zinc-600 font-black mb-1 uppercase pointer-events-none">${type}</div><div class="flex gap-2 items-center text-[11px] font-bold uppercase pointer-events-none">${img ? `<img src="${img}" class="w-6 h-6 object-cover bg-black border border-zinc-800">` : ''}${label}</div>${sockets}`;
-            n.addEventListener('mousedown', (e) => { if (e.target.classList.contains('socket')) return; deselectNodes(); selectedWireIndex = null; selectedNodeId = nodeId; n.style.borderColor = '#ef4444'; drawWires(); });
-            n.addEventListener('dblclick', (e) => { if (type === 'process') editProcess(nodeId); });
+            
+            n.innerHTML = `${badgeHtml}<div class="text-[8px] text-zinc-600 font-black mb-1 uppercase pointer-events-none">${type}</div><div class="flex gap-2 items-center text-[11px] font-bold uppercase pointer-events-none">${img ? `<img src="${img}" class="w-6 h-6 object-cover bg-black border border-zinc-800">` : ''}${label}</div>${sockets}`;
+
+            n.addEventListener('mousedown', (e) => { if (e.target.classList.contains('socket')) return; deselectNodes(); selectedNodeId = nodeId; n.style.borderColor = '#ef4444'; drawWires(); });
+            n.addEventListener('dblclick', (e) => { 
+                if (type === 'process') editProcess(nodeId); 
+                if (type === 'part') editNodeQty(nodeId); 
+            });
             document.getElementById('router-canvas').appendChild(n);
             makeDraggable(n);
+            updateInventoryMenu();
+        }
+
+        function editNodeQty(id) {
+            const n = document.getElementById(id);
+            let othersQty = 0;
+            document.querySelectorAll(`.node[data-part-hash="${n.dataset.partHash}"]`).forEach(node => {
+                if (node.id !== id) othersQty += (parseInt(node.dataset.qty) || 0);
+            });
+            const totalBudget = bomRequirements[n.dataset.partHash]?.total || 0;
+            const remainingBudget = totalBudget - othersQty;
+
+            document.getElementById('modalContent').innerHTML = `
+                <div class="space-y-6">
+                    <h2 class="text-2xl font-black uppercase italic text-blue-500 tracking-tighter">Node_Quantity_Allocation</h2>
+                    <div class="bg-zinc-900 p-8 border border-zinc-800">
+                        <label class="mb-4 text-zinc-400 font-bold uppercase text-xs">Assign Units (Vault Limit: ${remainingBudget})</label>
+                        <input type="number" id="qtyInput" value="${n.dataset.qty}" class="w-full bg-black border border-zinc-700 p-4 font-black text-5xl text-white outline-none focus:border-blue-500">
+                    </div>
+                    <div class="flex gap-4">
+                        <button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-bold uppercase tracking-widest">Cancel</button>
+                        <button id="saveBtn" class="flex-2 bg-blue-600 p-4 font-black uppercase text-white hover:bg-blue-500 transition">Update_Quantity</button>
+                    </div>
+                </div>`;
+            toggleModal(true);
+
+            document.getElementById('saveBtn').onclick = function() {
+                const val = parseInt(document.getElementById('qtyInput').value);
+                if (isNaN(val) || val < 1) { alert("INVALID_INPUT: Quantity must be at least 1."); return; }
+                if (val > remainingBudget) { alert(`VAULT_OVERFLOW: You only have ${remainingBudget} units left.`); return; }
+                toggleModal(false); 
+                n.dataset.qty = val; 
+                document.getElementById(`qty_${id}`).innerText = val;
+                updateInventoryMenu();
+                saveLayout();
+            };
         }
 
         function editProcess(id) {
             const n = document.getElementById(id);
-            document.getElementById('modalContent').innerHTML = `<h2 class="text-2xl font-black uppercase mb-4 text-amber-500 italic">${n.dataset.label} // DATA</h2><textarea id="p_instr" class="w-full bg-zinc-950 border border-zinc-800 p-4 h-64 font-bold text-white outline-none focus:border-amber-500">${n.dataset.instr || ''}</textarea><div class="flex gap-4 mt-8"><button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-bold uppercase">Close</button><button onclick="saveProc('${id}')" class="flex-1 bg-amber-600 py-3 font-black uppercase text-white">Commit</button></div>`;
+            document.getElementById('modalContent').innerHTML = `<h2 class="text-2xl font-black uppercase mb-4 text-amber-500 italic">${n.dataset.label} // DATA</h2><textarea id="p_instr" class="w-full bg-zinc-950 border border-zinc-800 p-4 h-64 font-bold text-white outline-none focus:border-amber-500">${n.dataset.instr || ''}</textarea><div class="flex gap-4 mt-8"><button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-bold uppercase">Close</button><button id="saveProcBtn" class="flex-1 bg-amber-600 py-3 font-black uppercase text-white">Commit</button></div>`;
             toggleModal(true);
+            document.getElementById('saveProcBtn').onclick = function() {
+                n.dataset.instr = document.getElementById('p_instr').value; 
+                toggleModal(false); 
+                saveLayout();
+            };
         }
-
-        function saveProc(id) { document.getElementById(id).dataset.instr = document.getElementById('p_instr').value; toggleModal(false); saveLayout(); }
 
         function handleWire(e, type, nodeId, idx) {
             e.stopPropagation();
             const sid = type === 'out' ? `out_${nodeId}` : `in_${nodeId}_${idx}`;
-            if (!sourceSocketId) { if (type === 'in') return; sourceSocketId = sid; document.getElementById(sid).classList.add('active'); } 
-            else { if (type === 'out') { document.getElementById(sourceSocketId).classList.remove('active'); sourceSocketId = sid; document.getElementById(sid).classList.add('active'); return; }
+
+            if (!sourceSocketId) {
+                if (type === 'in') return; 
+                if (connections.some(c => c.sid === sid)) {
+                    alert("OUTPUT_OCCUPIED: Node output can only feed one destination.");
+                    return;
+                }
+                sourceSocketId = sid; 
+                document.getElementById(sid).classList.add('active'); 
+            } else {
+                if (type === 'out') { 
+                    document.getElementById(sourceSocketId).classList.remove('active');
+                    if (connections.some(c => c.sid === sid)) {
+                        sourceSocketId = null;
+                        alert("OUTPUT_OCCUPIED: Node output can only feed one destination.");
+                        return;
+                    }
+                    sourceSocketId = sid; 
+                    document.getElementById(sid).classList.add('active'); 
+                    return; 
+                }
+                
                 connections.push({ sid: sourceSocketId, tid: sid, tn: nodeId });
                 if (type === 'in') createPort(nodeId, idx + 1);
-                document.getElementById(sourceSocketId).classList.remove('active'); sourceSocketId = null; drawWires();
+                document.getElementById(sourceSocketId).classList.remove('active'); 
+                sourceSocketId = null; 
+                drawWires();
             }
         }
 
@@ -112,9 +255,9 @@
             const c = document.getElementById(`in_c_${nodeId}`);
             if (!c || document.getElementById(`in_${nodeId}_${idx}`)) return;
             const ns = document.createElement('div'); ns.className = 'socket socket-in'; ns.id = `in_${nodeId}_${idx}`;
-            const top = 35 + (idx * 22); ns.style.top = top + 'px';
+            ns.style.top = (35 + (idx * 22)) + 'px';
             ns.onclick = (e) => handleWire(e, 'in', nodeId, idx);
-            c.appendChild(ns); document.getElementById(nodeId).style.minHeight = (top + 40) + "px";
+            c.appendChild(ns); document.getElementById(nodeId).style.minHeight = (35 + (idx * 22) + 40) + "px";
         }
 
         function drawWires() {
@@ -127,10 +270,9 @@
                 const sR = s.getBoundingClientRect(), tR = t.getBoundingClientRect();
                 const x1 = sR.left - cR.left + 7, y1 = sR.top - cR.top + 7, x2 = tR.left - cR.left + 7, y2 = tR.top - cR.top + 7;
                 const path = document.createElementNS("http://www.w3.org/2000/svg", "path"), dx = Math.abs(x1 - x2) * 0.5;
-                const isSelected = selectedWireIndex === index;
                 path.setAttribute("d", `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`);
-                path.setAttribute("stroke", isSelected ? "#ef4444" : "#3b82f6");
-                path.setAttribute("stroke-width", isSelected ? "4" : "2");
+                path.setAttribute("stroke", selectedWireIndex === index ? "#ef4444" : "#3b82f6");
+                path.setAttribute("stroke-width", selectedWireIndex === index ? "4" : "2");
                 path.setAttribute("fill", "none"); path.setAttribute("marker-end", "url(#arrow)");
                 path.style.cursor = "pointer"; path.style.pointerEvents = "auto";
                 path.onmousedown = (e) => { e.stopPropagation(); deselectNodes(); selectedWireIndex = index; drawWires(); };
@@ -141,28 +283,70 @@
         function makeDraggable(el) {
             let sX, sY;
             el.onmousedown = (e) => { if(e.target.classList.contains('socket')) return; moveDetected = false; sX = e.clientX; sY = e.clientY;
-                document.onmousemove = (ev) => { if (ev.clientX !== sX || ev.clientY !== sY) moveDetected = true; el.style.left = (el.offsetLeft - (sX - ev.clientX))+'px'; el.style.top = (el.offsetTop - (sY - ev.clientY))+'px'; sX = ev.clientX; sY = ev.clientY; drawWires(); };
+                document.onmousemove = (ev) => { el.style.left = (el.offsetLeft - (sX - ev.clientX))+'px'; el.style.top = (el.offsetTop - (sY - ev.clientY))+'px'; sX = ev.clientX; sY = ev.clientY; drawWires(); };
                 document.onmouseup = () => document.onmousemove = null;
             };
         }
 
         function saveLayout() {
-            localStorage.setItem(`flow_v1_${currentProjectId}`, JSON.stringify({ nodes: [...document.querySelectorAll('.node')].map(n => ({ id: n.id, type: n.dataset.type, label: n.dataset.label, x: parseInt(n.style.left), y: parseInt(n.style.top), h: n.style.minHeight, instr: n.dataset.instr })), links: connections }));
-            const toast = document.createElement('div'); toast.className = "fixed bottom-8 right-8 bg-blue-600 px-6 py-3 font-black uppercase italic tracking-widest z-[300]"; toast.innerText = "FOUNDRY_SYNC_COMPLETE"; document.body.appendChild(toast); setTimeout(() => toast.remove(), 2500);
+            localStorage.setItem(`flow_v1_${currentProjectId}`, JSON.stringify({ 
+                nodes: [...document.querySelectorAll('.node')].map(n => ({ id: n.id, type: n.dataset.type, label: n.dataset.label, x: parseInt(n.style.left), y: parseInt(n.style.top), h: n.style.minHeight, instr: n.dataset.instr, qty: n.dataset.qty, partHash: n.dataset.partHash })), 
+                links: connections 
+            }));
+            const toast = document.createElement('div'); toast.className = "fixed bottom-8 right-8 bg-blue-600 px-6 py-3 font-black uppercase italic tracking-widest z-[300]"; toast.innerText = "FOUNDRY_SYNC_COMPLETE"; document.body.appendChild(toast); setTimeout(() => toast.remove(), 2000);
         }
 
         function loadSavedLayout() {
             const rawData = localStorage.getItem(`flow_v1_${currentProjectId}`);
             if (!rawData) { spawnNode('final', 1000, 300, 'PROJECT_ASSEMBLY', '', 'f_root'); return; }
             const data = JSON.parse(rawData); connections = data.links || [];
-            data.nodes.forEach(n => { spawnNode(n.type, n.x, n.y, n.label, '', n.id, n.instr); if(n.h) document.getElementById(n.id).style.minHeight = n.h; });
-            connections.forEach(l => { const portIndex = parseInt(l.tid.split('_').pop()); if (portIndex > 0) { for(let i=1; i<=portIndex; i++) createPort(l.tn, i); } });
-            document.querySelectorAll('.in-cont').forEach(cont => createPort(cont.id.replace('in_c_', ''), cont.querySelectorAll('.socket-in').length));
-            setTimeout(drawWires, 50); setTimeout(drawWires, 300);
+            data.nodes.forEach(n => spawnNode(n.type, n.x, n.y, n.label, '', n.id, n.instr, n.qty || 1, n.partHash || ''));
+            
+            // Re-generate ports based on connections
+            connections.forEach(l => { const idx = parseInt(l.tid.split('_').pop()); if (idx > 0) for(let i=1; i<=idx; i++) createPort(l.tn, i); });
+            
+            // Clean up any weird states from old saves
+            document.querySelectorAll('.node').forEach(n => {
+                if(n.dataset.type !== 'part') cleanupPorts(n.id);
+            });
+
+            setTimeout(drawWires, 300);
         }
 
-        function removeNode(id) { connections = connections.filter(c => !c.sid.includes(id) && !c.tid.includes(id)); const el = document.getElementById(id); if (el) el.remove(); drawWires(); }
         function toggleModal(s) { document.getElementById('modalContainer').classList.toggle('hidden', !s); }
+        function deselectNodes() { selectedNodeId = null; document.querySelectorAll('.node').forEach(n => n.style.borderColor = ''); }
+
+        function addProcessNode() {
+            const content = document.getElementById('modalContent');
+            content.innerHTML = `
+                <div class="space-y-6">
+                    <h2 class="text-2xl font-black uppercase italic text-amber-500 tracking-tighter">Initialize_Process</h2>
+                    <select id="processPreset" onchange="document.getElementById('customProcessName').value = this.value" class="w-full bg-zinc-900 border border-zinc-800 p-3 text-sm font-bold uppercase text-white outline-none">
+                        <optgroup label="Fabrication">
+                            <option value="3D_PRINTING">3D_PRINTING</option>
+                            <option value="CNC_MACHINING">CNC_MACHINING</option>
+                            <option value="WELDING_FAB">WELDING_FAB</option>
+                        </optgroup>
+                        <optgroup label="Assembly">
+                            <option value="ASSEMBLY">ASSEMBLY</option>
+                        </optgroup>
+                        <optgroup label="Preparation">
+                            <option value="ULTRASONIC_CLEAN">ULTRASONIC_CLEAN</option>
+                            <option value="POWDER_COATING">POWDER_COATING</option>
+                        </optgroup>
+                    </select>
+                    <input type="text" id="customProcessName" placeholder="PROCESS_NAME..." class="w-full bg-zinc-900 border border-zinc-800 p-4 text-xl font-black uppercase text-white outline-none">
+                    <div class="flex gap-4">
+                        <button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-bold uppercase">Cancel</button>
+                        <button id="deployProc" class="flex-2 bg-amber-600 p-4 font-black uppercase text-white">Deploy</button>
+                    </div>
+                </div>`;
+            toggleModal(true);
+            const input = document.getElementById('customProcessName');
+            input.focus(); input.onkeydown = (e) => { if(e.key === 'Enter') document.getElementById('deployProc').click(); };
+            document.getElementById('deployProc').onclick = function() { const name = document.getElementById('customProcessName').value.trim(); if (name) { spawnNode('process', 500, 400, name, ''); toggleModal(false); } };
+        }
+
         init();
     </script>
 </body>
