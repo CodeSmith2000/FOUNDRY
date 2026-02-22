@@ -39,46 +39,88 @@
     <script>
         let db, SQL, currentProjectId;
 
+        // --- CORE INITIALIZATION ---
         async function init() {
+            console.log("BOOT_SEQUENCE: Initializing System...");
             SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` });
+            
             try {
-                const res = await fetch('/get_db');
+                const res = await fetch('/get_vault');
                 if (res.ok) {
                     const buf = await res.arrayBuffer();
                     db = new SQL.Database(new Uint8Array(buf));
-                    const cols = ["img", "stock", "req", "desc", "links", "bulk_cost", "bulk_qty", "cad_link", "part_hash", "lead_time"];
-                    cols.forEach(c => { try { db.run(`ALTER TABLE parts ADD COLUMN ${c} TEXT`); } catch(e) {} });
-                } else { throw new Error("404"); }
+                    
+                    // SAFE MIGRATION: Check if projects table exists first
+                    const tableCheck = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'");
+                    if (tableCheck.length > 0) {
+                        const tableInfo = db.exec("PRAGMA table_info(projects)")[0].values;
+                        const columns = tableInfo.map(c => c[1]);
+                        
+                        // Add missing columns if they don't exist
+                        if (!columns.includes('stock')) {
+                            console.log("Migration: Adding Stock/Price columns");
+                            db.run("ALTER TABLE projects ADD COLUMN stock INT DEFAULT 0");
+                            db.run("ALTER TABLE projects ADD COLUMN price REAL DEFAULT 0.0");
+                        }
+                    }
+                } else { throw new Error("VAULT_NOT_FOUND"); }
             } catch (err) {
+                console.warn("VAULT_MISSING: Building fresh database structure.");
                 db = new SQL.Database();
-                db.run(`CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT);
-                        CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER, part_num TEXT, img TEXT, stock INT DEFAULT 0, req INT DEFAULT 1, desc TEXT, links TEXT, bulk_cost REAL DEFAULT 0.0, bulk_qty INT DEFAULT 1, cad_link TEXT, part_hash TEXT, lead_time INT DEFAULT 7);`);
+                db.run(`CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, stock INT DEFAULT 0, price REAL DEFAULT 0.0);
+                        CREATE TABLE IF NOT EXISTS parts (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                            project_id TEXT, 
+                            part_num TEXT, 
+                            img TEXT, 
+                            stock INT DEFAULT 0, 
+                            req INT DEFAULT 1, 
+                            desc TEXT, 
+                            links TEXT, 
+                            bulk_cost REAL DEFAULT 0.0, 
+                            bulk_qty INT DEFAULT 1, 
+                            cad_link TEXT, 
+                            lead_time INT DEFAULT 7
+                        );`);
             }
             renderVault();
         }
 
-        // IMPROVED PERSISTENCE WITH KEEPALIVE
+        // --- PERSISTENCE (SAVE TO PYTHON) ---
         async function persist() {
             if (!db) return;
-            const data = db.export();
+            console.log("Syncing to Python Server...");
             try {
-                // Pointing to /upload_db per your app.py
-                await fetch('/upload_db', { 
+                const binaryData = db.export();
+                const res = await fetch('/save_vault', { 
                     method: 'POST', 
-                    body: data,
-                    keepalive: true 
+                    body: binaryData,
+                    headers: { 'Content-Type': 'application/octet-stream' }
                 });
-                document.getElementById('sync-indicator').innerText = "SYNC_COMPLETE";
-                setTimeout(() => document.getElementById('sync-indicator').innerText = "System_Ready", 2000);
-            } catch (err) {
-                console.error("Critical Sync Failure", err);
+                
+                if (res.ok) {
+                    console.log("Sync Successful");
+                    const indicator = document.getElementById('sync-indicator');
+                    indicator.innerText = "VAULT_SYNCED";
+                    indicator.classList.add('text-emerald-500');
+                    setTimeout(() => { 
+                        indicator.innerText = "System_Ready";
+                        indicator.classList.remove('text-emerald-500');
+                    }, 2000);
+                    return true;
+                } else {
+                    console.error("Server rejected save:", res.status);
+                    return false;
+                }
+            } catch (err) { 
+                console.error("Network Failure:", err); 
                 document.getElementById('sync-indicator').innerText = "SYNC_FAILED";
+                return false;
             }
         }
 
-        // NAVIGATION GUARD
+        // --- NAVIGATION & VIEW LOGIC ---
         async function navigateWithSave(url) {
-            document.getElementById('sync-indicator').innerText = "SAVING_BEFORE_EXIT...";
             await persist();
             window.location.href = url;
         }
@@ -86,139 +128,184 @@
         function renderVault() {
             const res = db.exec("SELECT * FROM projects");
             const projects = res[0] ? res[0].values : [];
+            const cols = res[0] ? res[0].columns : [];
+            const getV = (row, name) => row[cols.indexOf(name)];
+
             document.getElementById('project-grid').innerHTML = projects.map(p => `
-                <div onclick="renderDetail(${p[0]})" class="bg-zinc-900 p-8 border border-zinc-800 hover:border-blue-600 cursor-pointer font-bold uppercase transition">
-                    <span class="text-zinc-600 text-[9px] block mb-2 font-black italic">PRJ_${p[0]}</span>${p[1]}
-                </div>`).join('');
+                <div onclick="renderDetail('${getV(p, 'id')}')" class="bg-zinc-900 p-8 border border-zinc-800 hover:border-blue-600 cursor-pointer transition group">
+                    <div class="flex justify-between items-start mb-4">
+                        <span class="text-zinc-600 text-[9px] font-black italic uppercase">HASH: ${getV(p, 'id').substring(0,8)}</span>
+                        <span class="bg-blue-600/20 text-blue-400 text-[10px] px-2 py-1 font-bold">QTY: ${getV(p, 'stock')}</span>
+                    </div>
+                    <div class="text-xl tracking-tighter font-bold uppercase mb-4">${getV(p, 'name')}</div>
+                    <div class="text-emerald-500 font-black text-sm">$${parseFloat(getV(p, 'price')).toFixed(2)} <span class="text-zinc-600 text-[10px]">MSRP</span></div>
+                </div>`).join('') || `<div class="col-span-3 py-20 text-center text-zinc-700 font-black italic border-2 border-dashed border-zinc-900 uppercase">Vault is Empty</div>`;
+            
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.getElementById('view-vault').classList.add('active');
         }
 
+        async function addProject() { 
+            const n = prompt("Enter New Project Name:"); 
+            if (n) { 
+                const hash = 'PRJ-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+                console.log("Creating Project:", n, hash);
+                db.run("INSERT INTO projects (id, name, stock, price) VALUES (?, ?, 0, 0.0)", [hash, n]); 
+                await persist(); 
+                renderVault(); 
+            } 
+        }
+
         function renderDetail(pId) {
             currentProjectId = pId;
-            const projName = db.exec(`SELECT name FROM projects WHERE id=${pId}`)[0].values[0][0];
-            const res = db.exec(`SELECT * FROM parts WHERE project_id=${pId}`);
-            const parts = res[0] ? res[0].values : [];
-            const columns = res[0] ? res[0].columns : [];
-            const getCol = (name) => columns.indexOf(name);
+            const projRes = db.exec(`SELECT * FROM projects WHERE id='${pId}'`)[0];
+            if(!projRes) return;
             
-            const total = parts.reduce((sum, p) => {
-                const cost = parseFloat(p[getCol('bulk_cost')]) || 0;
-                const qty = parseInt(p[getCol('bulk_qty')]) || 1;
-                const req = parseInt(p[getCol('req')]) || 1;
-                return sum + ((cost / qty) * req);
+            let proj = {};
+            projRes.columns.forEach((col, i) => proj[col] = projRes.values[0][i]);
+
+            const res = db.exec(`SELECT * FROM parts WHERE project_id='${pId}'`);
+            const parts = res[0] ? res[0].values : [];
+            const pCols = res[0] ? res[0].columns : [];
+            const getP = (row, name) => row[pCols.indexOf(name)];
+            
+            const bomTotal = parts.reduce((sum, p) => {
+                const cost = parseFloat(getP(p, 'bulk_cost')) || 0;
+                const bQty = parseInt(getP(p, 'bulk_qty')) || 1;
+                const req = parseInt(getP(p, 'req')) || 0;
+                return sum + ((cost / bQty) * req);
             }, 0);
 
             document.getElementById('view-detail').innerHTML = `
-                <div class="max-w-7xl mx-auto"><div class="flex gap-8">
-                    <div class="w-72 space-y-4">
-                        <button onclick="renderVault()" class="text-zinc-500 text-[10px] font-black uppercase tracking-widest hover:text-white transition">← Root</button>
-                        <div class="bg-slate-900 border border-slate-800 p-6 shadow-xl"><label>Valuation</label><div class="text-3xl font-black text-emerald-400">$${total.toFixed(2)}</div></div>
-                        <button onclick="navigateWithSave('/production.html?id=${pId}')" class="w-full text-center bg-orange-600/10 border border-orange-600 text-orange-500 py-3 text-[10px] font-black uppercase italic tracking-widest">{ MANUFACTURING_OPS }</button>
-                        <button onclick="navigateWithSave('/command.html?id=${pId}')" class="w-full text-center bg-blue-600/10 border border-blue-600 text-blue-500 py-3 text-[10px] font-black uppercase italic tracking-widest">{ COMMAND_&_ANALYTICS }</button>
-                        <button onclick="openPartModal(null)" class="w-full bg-zinc-100 text-zinc-950 py-3 text-[10px] font-black uppercase">Add_Part</button>
-                    </div>
-                    <div class="flex-1">
-                        <h2 class="text-6xl font-black uppercase tracking-tighter italic mb-10 underline decoration-blue-600 underline-offset-8">${projName}</h2>
-                        <div class="grid grid-cols-4 gap-6">${parts.map(p => `
-                            <div onclick="renderPartSpecs(${p[getCol('id')]})" class="relative aspect-square bg-zinc-900 border border-zinc-800 hover:border-blue-500 cursor-pointer group overflow-hidden">
-                                <img src="${p[getCol('img')] || ''}" class="w-full h-full object-cover opacity-30 group-hover:opacity-70 transition">
-                                <div class="absolute inset-0 flex items-center justify-center font-black uppercase text-center px-4">${p[getCol('part_num')]}</div>
-                            </div>`).join('')}
+                <div class="max-w-7xl mx-auto">
+                    <div class="flex gap-8">
+                        <div class="w-72 space-y-4">
+                            <button onclick="renderVault()" class="text-zinc-500 text-[10px] font-black uppercase hover:text-white transition">← Root_Index</button>
+                            <div class="bg-slate-900 border border-slate-800 p-6 shadow-xl border-t-2 border-blue-500">
+                                <label>Physical_Stock</label>
+                                <div class="text-3xl font-black text-white mb-4">${proj.stock} U</div>
+                                <label>Global_MSRP_($)</label>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-emerald-500 font-bold">$</span>
+                                    <input type="number" step="0.01" value="${proj.price}" 
+                                        onchange="updateProjectField('price', this.value)" 
+                                        class="bg-black border border-zinc-800 p-2 text-emerald-400 w-full font-bold outline-none">
+                                </div>
+                            </div>
+                            <div class="bg-slate-900 border border-slate-800 p-6">
+                                <label>BOM_Unit_Cost</label>
+                                <div class="text-2xl font-black text-emerald-400">$${bomTotal.toFixed(2)}</div>
+                                <div class="text-[9px] text-zinc-500 mt-1 uppercase">Margin: ${proj.price > 0 ? (((proj.price - bomTotal)/proj.price)*100).toFixed(1) : 0}%</div>
+                            </div>
+                            <button onclick="navigateWithSave('/production.html?id=${pId}')" class="w-full bg-orange-600/10 border border-orange-600 text-orange-500 py-4 text-[10px] font-black uppercase italic hover:bg-orange-600 transition">{ MANUFACTURING }</button>
+                            <button onclick="navigateWithSave('/command.html?id=${pId}')" class="w-full bg-blue-600/10 border border-blue-600 text-blue-500 py-4 text-[10px] font-black uppercase italic hover:bg-blue-600 transition">{ COMMAND }</button>
+                            <button onclick="openPartModal(null)" class="w-full bg-zinc-100 text-zinc-950 py-3 text-[10px] font-black uppercase">Add_Component</button>
+                        </div>
+                        <div class="flex-1">
+                            <h2 class="text-6xl font-black uppercase tracking-tighter italic mb-10 underline decoration-blue-600 underline-offset-8">${proj.name}</h2>
+                            <div class="grid grid-cols-4 gap-6">
+                                ${parts.map(p => `
+                                    <div onclick="renderPartSpecs(${getP(p, 'id')})" class="relative aspect-square bg-zinc-900 border border-zinc-800 hover:border-blue-500 cursor-pointer group overflow-hidden">
+                                        <img src="${getP(p, 'img') || ''}" class="w-full h-full object-cover opacity-20 group-hover:opacity-60 transition">
+                                        <div class="absolute inset-0 flex items-center justify-center font-black uppercase text-center px-4 tracking-widest text-xs">${getP(p, 'part_num')}</div>
+                                    </div>`).join('')}
+                            </div>
                         </div>
                     </div>
-                </div></div>`;
+                </div>`;
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.getElementById('view-detail').classList.add('active');
+        }
+
+        async function updateProjectField(field, val) {
+            db.run(`UPDATE projects SET ${field}=? WHERE id=?`, [val, currentProjectId]);
+            await persist();
+            renderDetail(currentProjectId);
         }
 
         function renderPartSpecs(id) {
             const res = db.exec(`SELECT * FROM parts WHERE id=${id}`)[0];
             let r = {}; res.columns.forEach((col, i) => r[col] = res.values[0][i]);
             const unit = (parseFloat(r.bulk_cost) / (parseInt(r.bulk_qty) || 1)).toFixed(2);
+
             document.getElementById('view-detail').innerHTML = `
-                <div class="max-w-6xl mx-auto bg-slate-950 border border-slate-800 flex shadow-2xl border-l-8 border-l-blue-600">
-                    <div class="w-1/2 bg-black flex items-center relative"><img src="${r.img}" class="w-full h-full object-contain"><button onclick="renderDetail(currentProjectId)" class="absolute top-6 left-6 bg-blue-600 p-4 font-black">BACK</button></div>
+                <div class="max-w-6xl mx-auto bg-slate-950 border border-slate-800 flex shadow-2xl border-l-8 border-l-blue-600 min-h-[500px]">
+                    <div class="w-1/2 bg-black flex items-center justify-center relative">
+                        <img src="${r.img}" class="w-full h-full object-contain p-4">
+                        <button onclick="renderDetail('${currentProjectId}')" class="absolute top-6 left-6 bg-blue-600 px-6 py-2 text-xs font-black italic">BACK</button>
+                    </div>
                     <div class="p-12 w-1/2 space-y-8">
-                        <div class="flex justify-between items-start"><div><h2 class="text-5xl font-black uppercase italic underline decoration-blue-600 decoration-4">${r.part_num}</h2><p class="text-zinc-500 mt-4 text-sm font-bold border-l-2 border-zinc-800 pl-4">${r.desc||'--'}</p></div><button onclick="openPartModal(${r.id})" class="text-blue-500 text-[10px] font-black uppercase">Revise</button></div>
+                        <div><h2 class="text-5xl font-black uppercase italic underline decoration-blue-600 decoration-4">${r.part_num}</h2><p class="text-zinc-500 mt-4 text-sm font-bold pl-4 border-l-2 border-zinc-800">${r.desc || 'No description'}</p></div>
                         <div class="grid grid-cols-3 gap-4">
-                            <div class="bg-slate-900 p-6 border border-slate-800"><label>Required</label><div class="text-2xl font-black text-blue-500">${r.req}</div></div>
-                            <div class="bg-slate-900 p-6 border border-slate-800"><label>Unit $</label><div class="text-2xl font-black text-emerald-400">$${unit}</div></div>
+                            <div class="bg-slate-900 p-6 border border-slate-800"><label>BOM_Req</label><div class="text-2xl font-black text-blue-500">${r.req} U</div></div>
+                            <div class="bg-slate-900 p-6 border border-slate-800"><label>In_Stock</label><div class="text-2xl font-black text-white">${r.stock} U</div></div>
+                            <div class="bg-slate-900 p-6 border border-slate-800"><label>Unit_$</label><div class="text-2xl font-black text-emerald-400">$${unit}</div></div>
                         </div>
-                        <div class="space-y-3 pt-4">
-                            ${r.links ? `<a href="${r.links}" target="_blank" class="block bg-slate-900 p-4 border border-zinc-800 text-blue-400 text-xs font-black uppercase text-center">🔗 Source</a>` : ''}
-                            ${r.cad_link ? `<a href="${r.cad_link}" target="_blank" class="block bg-slate-900 p-4 border border-zinc-800 text-orange-400 text-xs font-black uppercase text-center">📐 CAD_FILE</a>` : ''}
-                        </div>
+                        <button onclick="openPartModal(${r.id})" class="w-full bg-zinc-800 py-3 text-[10px] font-black uppercase">Edit_Specifications</button>
                     </div>
                 </div>`;
         }
 
         function openPartModal(partId) {
-            let p = { id: null, part_num: "", img: "", req: 1, stock: 0, desc: "", bulk_cost: 0, bulk_qty: 1, links: "", cad_link: "" };
+            let p = { id: null, part_num: "", img: "", req: 1, stock: 0, bulk_cost: 0, bulk_qty: 1 };
             if (partId) {
                 const res = db.exec(`SELECT * FROM parts WHERE id=${partId}`)[0];
                 res.columns.forEach((col, i) => p[col] = res.values[0][i]);
             }
             document.getElementById('modalContent').innerHTML = `
-                <h2 class="text-3xl font-black uppercase mb-8 text-blue-500 underline">Part_Specification</h2>
+                <h2 class="text-3xl font-black uppercase mb-8 text-blue-500 underline">Component_Specification</h2>
                 <div class="grid grid-cols-2 gap-10">
-                    <div class="space-y-4 text-white">
-                        <label>Part Reference</label><input type="text" id="m_num" value="${p.part_num}" class="spec-input font-bold uppercase">
-                        <label>Image URL</label><input type="text" id="m_img" value="${p.img}" class="spec-input">
-                        <label>CAD Link</label><input type="text" id="m_cad" value="${p.cad_link}" class="spec-input">
-                        <label>Notes</label><textarea id="m_desc" class="spec-input h-24">${p.desc}</textarea>
+                    <div class="space-y-4">
+                        <label>Reference_ID</label><input type="text" id="m_num" value="${p.part_num}" class="spec-input font-bold uppercase">
+                        <label>Preview_URL</label><input type="text" id="m_img" value="${p.img}" class="spec-input">
                     </div>
-                    <div class="space-y-4 text-white">
-                        <div class="bg-slate-900 p-6 border border-slate-800 space-y-4">
-                            <label class="text-blue-500 font-black italic text-[9px]">Financials</label>
-                            <div class="grid grid-cols-2 gap-4">
-                                <div><label>Total Price ($)</label><input type="number" step="0.01" id="m_cost" value="${p.bulk_cost}" class="spec-input"></div>
-                                <div><label>Bulk Qty</label><input type="number" id="m_qty" value="${p.bulk_qty}" class="spec-input"></div>
-                            </div>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div><label>Bulk_Cost_($)</label><input type="number" step="0.01" id="m_cost" value="${p.bulk_cost}" class="spec-input"></div>
+                            <div><label>Bulk_Qty</label><input type="number" id="m_qty" value="${p.bulk_qty}" class="spec-input"></div>
                         </div>
-                        <div class="grid grid-cols-2 gap-4 text-white">
-                            <div><label>Required</label><input type="number" id="m_req" value="${p.req}" class="spec-input"></div>
-                            <div><label>Stock</label><input type="number" id="m_stock" value="${p.stock}" class="spec-input"></div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div><label>BOM_Req</label><input type="number" id="m_req" value="${p.req}" class="spec-input"></div>
+                            <div><label>In_Stock</label><input type="number" id="m_stock" value="${p.stock}" class="spec-input"></div>
                         </div>
-                        <label>Source Link</label><input type="text" id="m_link" value="${p.links}" class="spec-input">
                     </div>
                 </div>
                 <div class="flex gap-4 mt-10 pt-8 border-t border-slate-800">
                     <button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-black uppercase">Abort</button>
-                    <button onclick="commitPart(${p.id})" class="flex-1 bg-blue-600 py-4 font-black text-white uppercase italic">Commit_Data</button>
+                    <button onclick="commitPart(${p.id})" class="flex-1 bg-blue-600 py-4 font-black text-white uppercase italic tracking-widest">Commit_to_Vault</button>
                 </div>`;
             toggleModal(true);
         }
 
         async function commitPart(id) {
+            if (!currentProjectId) return alert("Error: No Project Context");
             const vals = {
-                num: document.getElementById('m_num').value, img: document.getElementById('m_img').value,
-                desc: document.getElementById('m_desc').value, link: document.getElementById('m_link').value,
-                cad: document.getElementById('m_cad').value, cost: parseFloat(document.getElementById('m_cost').value) || 0,
-                qty: parseInt(document.getElementById('m_qty').value) || 1, req: parseInt(document.getElementById('m_req').value) || 1,
+                num: document.getElementById('m_num').value, 
+                img: document.getElementById('m_img').value,
+                cost: parseFloat(document.getElementById('m_cost').value) || 0,
+                qty: parseInt(document.getElementById('m_qty').value) || 1, 
+                req: parseInt(document.getElementById('m_req').value) || 0,
                 stock: parseInt(document.getElementById('m_stock').value) || 0
             };
+
             if (id) {
-                db.run(`UPDATE parts SET part_num=?, img=?, req=?, stock=?, desc=?, links=?, bulk_cost=?, bulk_qty=?, cad_link=? WHERE id=?`, 
-                       [vals.num, vals.img, vals.req, vals.stock, vals.desc, vals.link, vals.cost, vals.qty, vals.cad, id]);
+                db.run(`UPDATE parts SET part_num=?, img=?, req=?, stock=?, bulk_cost=?, bulk_qty=? WHERE id=?`, 
+                       [vals.num, vals.img, vals.req, vals.stock, vals.cost, vals.qty, id]);
             } else {
-                const hash = 'SN-' + Math.random().toString(36).substr(2, 9).toUpperCase();
-                db.run(`INSERT INTO parts (project_id, part_num, img, req, stock, desc, links, bulk_cost, bulk_qty, cad_link, part_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, 
-                       [currentProjectId, vals.num, vals.img, vals.req, vals.stock, vals.desc, vals.link, vals.cost, vals.qty, vals.cad, hash]);
+                db.run(`INSERT INTO parts (project_id, part_num, img, req, stock, bulk_cost, bulk_qty) VALUES (?,?,?,?,?,?,?)`, 
+                       [currentProjectId, vals.num, vals.img, vals.req, vals.stock, vals.cost, vals.qty]);
             }
-            await persist(); toggleModal(false); renderDetail(currentProjectId);
+
+            await persist(); 
+            toggleModal(false); 
+            renderDetail(currentProjectId);
         }
 
-        function addProject() { 
-            const n = prompt("Name:"); 
-            if(n) { 
-                db.run("INSERT INTO projects (name) VALUES (?)", [n]); 
-                persist().then(renderVault); 
-            } 
+        function toggleModal(s) { 
+            document.getElementById('modalContainer').classList.toggle('hidden', !s); 
         }
-        
-        function toggleModal(s) { document.getElementById('modalContainer').classList.toggle('hidden', !s); }
-        
+
+        // --- START SYSTEM ---
         init();
     </script>
 </body>
