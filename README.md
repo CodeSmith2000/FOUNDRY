@@ -1,4 +1,4 @@
-# FOUNDRY // SYSTEM
+# FOUNDRY
 
 ### **A Lightweight Manufacturing Execution System (MES) & BOM Manager.**
 
