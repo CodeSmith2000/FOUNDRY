@@ -14,7 +14,7 @@ It operates on a **"Zero-Cloud" philosophy**—all data resides locally in a por
 
 ---
 
-## // CORE MODULES
+## CORE MODULES
 
 ### 1. FOUNDRY_VAULT (`index.html`)
 
@@ -44,7 +44,7 @@ It operates on a **"Zero-Cloud" philosophy**—all data resides locally in a por
 
 ---
 
-## // TECHNICAL ARCHITECTURE
+## TECHNICAL ARCHITECTURE
 
 * **Backend:** Python (Flask). Acts purely as a file server and binary blob persistence layer.
 * **Database:** SQLite (via `sql.js`). The database engine runs entirely in the browser (WASM). The backend only saves the binary file to disk.
@@ -53,7 +53,7 @@ It operates on a **"Zero-Cloud" philosophy**—all data resides locally in a por
 
 ---
 
-## // INSTALLATION & SETUP
+## INSTALLATION & SETUP
 
 FOUNDRY runs on a lightweight Python backend.
 
@@ -85,7 +85,7 @@ Open your browser and navigate to:
 
 ---
 
-## // OPERATIONAL WORKFLOW
+## OPERATIONAL WORKFLOW
 
 1. **Design (Vault):** Create a Project. Add Parts (Screws, PCBs, Motors). Define their cost and bulk purchase quantities.
 2. **Procure (Command):** Go to the Command tab. Click "Restock" on parts to simulate buying inventory. This increases your "Burn" metric.
