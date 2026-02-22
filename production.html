@@ -50,21 +50,46 @@
         let connections = [], moveDetected = false;
         let selectedWireIndex = null, selectedNodeId = null;
         let bomRequirements = {}; 
-
+        let projectName = "PROJECT_ASSEMBLY";
+    
+        // --- INITIALIZATION ---
         async function init() {
             const urlParams = new URLSearchParams(window.location.search);
             currentProjectId = urlParams.get('id');
-            SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` });
-            const res = await fetch('/get_db');
-            const buf = await res.arrayBuffer();
-            db = new SQL.Database(new Uint8Array(buf));
             
-            const parts = db.exec(`SELECT part_hash, part_num, req, img FROM parts WHERE project_id=${currentProjectId} AND part_num != 'FINISHED_PRODUCT'`)[0]?.values || [];
-            parts.forEach(p => { bomRequirements[p[0]] = { name: p[1], total: parseInt(p[2]), img: p[3] }; });
+            if (!currentProjectId) return alert("CRITICAL_ERROR: No Project ID found.");
 
+            // Load SQL engine
+            SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` });
+            
+            try {
+                const res = await fetch('/get_vault');
+                if (!res.ok) throw new Error("VAULT_OFFLINE");
+                
+                const buf = await res.arrayBuffer();
+                db = new SQL.Database(new Uint8Array(buf));
+                
+                // Get Project Name for the Root Node
+                const projRes = db.exec(`SELECT name FROM projects WHERE id='${currentProjectId}'`);
+                if(projRes[0]) projectName = projRes[0].values[0][0];
+
+                // Fetch parts using the NEW schema (id instead of part_hash, and quoting the project_id)
+                const resParts = db.exec(`SELECT id, part_num, req, img FROM parts WHERE project_id='${currentProjectId}'`);
+                const parts = resParts[0] ? resParts[0].values : [];
+                
+                bomRequirements = {};
+                parts.forEach(p => { 
+                    // p[0]=id, p[1]=part_num, p[2]=req, p[3]=img
+                    bomRequirements[p[0]] = { name: p[1], total: parseInt(p[2]), img: p[3] }; 
+                });
+    
+            } catch (err) {
+                console.error("FOUNDRY_DB_ERROR:", err);
+            }
+    
+            // Global Key Listeners
             window.addEventListener('keydown', (e) => {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
                 if (e.key === 'Delete' || e.key === 'Backspace') {
                     if (selectedWireIndex !== null) { 
                         const conn = connections[selectedWireIndex];
@@ -78,20 +103,28 @@
                     }
                 }
             });
-            document.getElementById('router-viewport').addEventListener('mousedown', (e) => { if (e.target.tagName !== 'path' && !e.target.closest('.node')) { selectedWireIndex = null; deselectNodes(); drawWires(); } });
+    
+            document.getElementById('router-viewport').addEventListener('mousedown', (e) => { 
+                if (e.target.tagName !== 'path' && !e.target.closest('.node')) { 
+                    selectedWireIndex = null; 
+                    deselectNodes(); 
+                    drawWires(); 
+                } 
+            });
             
             loadSavedLayout();
             updateInventoryMenu();
         }
-
+    
+        // --- NODE LOGIC ---
         function cleanupPorts(nodeId) {
             const inputs = connections.filter(c => c.tn === nodeId);
             inputs.sort((a, b) => parseInt(a.tid.split('_').pop()) - parseInt(b.tid.split('_').pop()));
-
+    
             const container = document.getElementById(`in_c_${nodeId}`);
             if(!container) return;
             container.innerHTML = '';
-
+    
             inputs.forEach((conn, idx) => {
                 conn.tid = `in_${nodeId}_${idx}`;
                 const ns = document.createElement('div');
@@ -101,7 +134,7 @@
                 ns.onclick = (e) => handleWire(e, 'in', nodeId, idx);
                 container.appendChild(ns);
             });
-
+    
             const emptyIdx = inputs.length;
             const emptySock = document.createElement('div');
             emptySock.className = 'socket socket-in';
@@ -109,12 +142,11 @@
             emptySock.style.top = (35 + (emptyIdx * 22)) + 'px';
             emptySock.onclick = (e) => handleWire(e, 'in', nodeId, emptyIdx);
             container.appendChild(emptySock);
-
+    
             document.getElementById(nodeId).style.minHeight = (35 + (emptyIdx * 22) + 40) + "px";
             drawWires();
-            saveLayout();
         }
-
+    
         function removeNode(id) { 
             const affectedNodes = [...new Set(connections.filter(c => c.sid.includes(id)).map(c => c.tn))];
             connections = connections.filter(c => !c.sid.includes(id) && !c.tid.includes(id)); 
@@ -124,44 +156,46 @@
             updateInventoryMenu(); 
             saveLayout(); 
         }
-
+    
         function updateInventoryMenu() {
             const placedCounts = {};
             document.querySelectorAll('.node[data-type="part"]').forEach(n => {
-                const hash = n.dataset.partHash;
+                const partId = n.dataset.partId;
                 const qty = parseInt(n.dataset.qty) || 0;
-                placedCounts[hash] = (placedCounts[hash] || 0) + qty;
+                placedCounts[partId] = (placedCounts[partId] || 0) + qty;
             });
-
-            document.getElementById('router-part-list').innerHTML = Object.entries(bomRequirements).map(([hash, data]) => {
-                const remaining = data.total - (placedCounts[hash] || 0);
+    
+            document.getElementById('router-part-list').innerHTML = Object.entries(bomRequirements).map(([partId, data]) => {
+                const remaining = data.total - (placedCounts[partId] || 0);
                 const isDisabled = remaining <= 0;
                 return `
-                    <button onclick="${isDisabled ? '' : `spawnNode('part', 400, 300, '${data.name}', '${data.img}', null, '', 1, '${hash}')`}" 
+                    <button onclick="${isDisabled ? '' : `spawnNode('part', 400, 300, '${data.name}', '${data.img || ''}', null, '', 1, '${partId}')`}" 
                          class="part-btn ${isDisabled ? 'disabled' : ''}">
                         <div class="flex justify-between items-center">
                             <span>${data.name}</span>
                             <span class="text-[9px] ${remaining > 0 ? 'text-blue-400' : 'text-red-500'} font-black">${remaining} REMAINING</span>
                         </div>
                     </button>`;
-            }).join('');
+            }).join('') || `<div class="text-[9px] text-zinc-700 italic font-black uppercase p-4 text-center border border-dashed border-zinc-900">No parts in Vault BOM</div>`;
         }
-
-        function spawnNode(type, x, y, label, img, identifier, instr = '', qty = 1, partHash = '') {
+    
+        function spawnNode(type, x, y, label, img, identifier, instr = '', qty = 1, partId = '') {
             const nodeId = identifier || 'n_' + Math.random().toString(36).substr(2, 9);
             if (document.getElementById(nodeId)) return;
             
             const n = document.createElement('div');
             n.id = nodeId; n.className = `node type-${type}`; n.style.left = x + 'px'; n.style.top = y + 'px';
-            Object.assign(n.dataset, { type, label, instr, qty, partHash });
+            Object.assign(n.dataset, { type, label, instr, qty, partId });
             
-            // LOGIC CHANGE: Only generate badge for 'part' type
             const badgeHtml = (type === 'part') ? `<div class="qty-badge" id="qty_${nodeId}">${qty}</div>` : '';
-
-            let sockets = (type === 'part') ? `<div class="socket socket-out" id="out_${nodeId}" style="top:35px;" onclick="handleWire(event, 'out', '${nodeId}')"></div>` : `<div class="in-cont" id="in_c_${nodeId}"><div class="socket socket-in" id="in_${nodeId}_0" style="top:35px;" onclick="handleWire(event, 'in', '${nodeId}', 0)"></div></div>` + ((type === 'process') ? `<div class="socket socket-out" id="out_${nodeId}" style="top:35px;" onclick="handleWire(event, 'out', '${nodeId}')"></div>` : '');
+    
+            let sockets = (type === 'part') ? 
+                `<div class="socket socket-out" id="out_${nodeId}" style="top:35px;" onclick="handleWire(event, 'out', '${nodeId}')"></div>` : 
+                `<div class="in-cont" id="in_c_${nodeId}"><div class="socket socket-in" id="in_${nodeId}_0" style="top:35px;" onclick="handleWire(event, 'in', '${nodeId}', 0)"></div></div>` + 
+                ((type === 'process') ? `<div class="socket socket-out" id="out_${nodeId}" style="top:35px;" onclick="handleWire(event, 'out', '${nodeId}')"></div>` : '');
             
-            n.innerHTML = `${badgeHtml}<div class="text-[8px] text-zinc-600 font-black mb-1 uppercase pointer-events-none">${type}</div><div class="flex gap-2 items-center text-[11px] font-bold uppercase pointer-events-none">${img ? `<img src="${img}" class="w-6 h-6 object-cover bg-black border border-zinc-800">` : ''}${label}</div>${sockets}`;
-
+            n.innerHTML = `${badgeHtml}<div class="text-[8px] text-zinc-600 font-black mb-1 uppercase pointer-events-none">${type}</div><div class="flex gap-2 items-center text-[11px] font-bold uppercase pointer-events-none">${img && img !== 'null' ? `<img src="${img}" class="w-6 h-6 object-cover bg-black border border-zinc-800">` : ''}${label}</div>${sockets}`;
+    
             n.addEventListener('mousedown', (e) => { if (e.target.classList.contains('socket')) return; deselectNodes(); selectedNodeId = nodeId; n.style.borderColor = '#ef4444'; drawWires(); });
             n.addEventListener('dblclick', (e) => { 
                 if (type === 'process') editProcess(nodeId); 
@@ -171,16 +205,17 @@
             makeDraggable(n);
             updateInventoryMenu();
         }
-
+    
+        // --- MODALS ---
         function editNodeQty(id) {
             const n = document.getElementById(id);
             let othersQty = 0;
-            document.querySelectorAll(`.node[data-part-hash="${n.dataset.partHash}"]`).forEach(node => {
+            document.querySelectorAll(`.node[data-part-id="${n.dataset.partId}"]`).forEach(node => {
                 if (node.id !== id) othersQty += (parseInt(node.dataset.qty) || 0);
             });
-            const totalBudget = bomRequirements[n.dataset.partHash]?.total || 0;
+            const totalBudget = bomRequirements[n.dataset.partId]?.total || 0;
             const remainingBudget = totalBudget - othersQty;
-
+    
             document.getElementById('modalContent').innerHTML = `
                 <div class="space-y-6">
                     <h2 class="text-2xl font-black uppercase italic text-blue-500 tracking-tighter">Node_Quantity_Allocation</h2>
@@ -194,11 +229,11 @@
                     </div>
                 </div>`;
             toggleModal(true);
-
+    
             document.getElementById('saveBtn').onclick = function() {
                 const val = parseInt(document.getElementById('qtyInput').value);
-                if (isNaN(val) || val < 1) { alert("INVALID_INPUT: Quantity must be at least 1."); return; }
-                if (val > remainingBudget) { alert(`VAULT_OVERFLOW: You only have ${remainingBudget} units left.`); return; }
+                if (isNaN(val) || val < 1) { alert("INVALID_INPUT"); return; }
+                if (val > remainingBudget) { alert(`VAULT_OVERFLOW: Limit is ${remainingBudget}`); return; }
                 toggleModal(false); 
                 n.dataset.qty = val; 
                 document.getElementById(`qty_${id}`).innerText = val;
@@ -206,7 +241,7 @@
                 saveLayout();
             };
         }
-
+    
         function editProcess(id) {
             const n = document.getElementById(id);
             document.getElementById('modalContent').innerHTML = `<h2 class="text-2xl font-black uppercase mb-4 text-amber-500 italic">${n.dataset.label} // DATA</h2><textarea id="p_instr" class="w-full bg-zinc-950 border border-zinc-800 p-4 h-64 font-bold text-white outline-none focus:border-amber-500">${n.dataset.instr || ''}</textarea><div class="flex gap-4 mt-8"><button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-bold uppercase">Close</button><button id="saveProcBtn" class="flex-1 bg-amber-600 py-3 font-black uppercase text-white">Commit</button></div>`;
@@ -217,32 +252,24 @@
                 saveLayout();
             };
         }
-
+    
+        // --- CABLING ---
         function handleWire(e, type, nodeId, idx) {
             e.stopPropagation();
             const sid = type === 'out' ? `out_${nodeId}` : `in_${nodeId}_${idx}`;
-
+    
             if (!sourceSocketId) {
                 if (type === 'in') return; 
-                if (connections.some(c => c.sid === sid)) {
-                    alert("OUTPUT_OCCUPIED: Node output can only feed one destination.");
-                    return;
-                }
+                if (connections.some(c => c.sid === sid)) { alert("OUTPUT_OCCUPIED"); return; }
                 sourceSocketId = sid; 
                 document.getElementById(sid).classList.add('active'); 
             } else {
                 if (type === 'out') { 
                     document.getElementById(sourceSocketId).classList.remove('active');
-                    if (connections.some(c => c.sid === sid)) {
-                        sourceSocketId = null;
-                        alert("OUTPUT_OCCUPIED: Node output can only feed one destination.");
-                        return;
-                    }
                     sourceSocketId = sid; 
                     document.getElementById(sid).classList.add('active'); 
                     return; 
                 }
-                
                 connections.push({ sid: sourceSocketId, tid: sid, tn: nodeId });
                 if (type === 'in') createPort(nodeId, idx + 1);
                 document.getElementById(sourceSocketId).classList.remove('active'); 
@@ -250,7 +277,7 @@
                 drawWires();
             }
         }
-
+    
         function createPort(nodeId, idx) {
             const c = document.getElementById(`in_c_${nodeId}`);
             if (!c || document.getElementById(`in_${nodeId}_${idx}`)) return;
@@ -259,7 +286,7 @@
             ns.onclick = (e) => handleWire(e, 'in', nodeId, idx);
             c.appendChild(ns); document.getElementById(nodeId).style.minHeight = (35 + (idx * 22) + 40) + "px";
         }
-
+    
         function drawWires() {
             const svg = document.getElementById('svg-canvas');
             svg.querySelectorAll('path:not(defs path)').forEach(p => p.remove());
@@ -279,7 +306,7 @@
                 svg.appendChild(path);
             });
         }
-
+    
         function makeDraggable(el) {
             let sX, sY;
             el.onmousedown = (e) => { if(e.target.classList.contains('socket')) return; moveDetected = false; sX = e.clientX; sY = e.clientY;
@@ -287,54 +314,40 @@
                 document.onmouseup = () => document.onmousemove = null;
             };
         }
-
+    
+        // --- SAVING ---
         function saveLayout() {
             localStorage.setItem(`flow_v1_${currentProjectId}`, JSON.stringify({ 
-                nodes: [...document.querySelectorAll('.node')].map(n => ({ id: n.id, type: n.dataset.type, label: n.dataset.label, x: parseInt(n.style.left), y: parseInt(n.style.top), h: n.style.minHeight, instr: n.dataset.instr, qty: n.dataset.qty, partHash: n.dataset.partHash })), 
+                nodes: [...document.querySelectorAll('.node')].map(n => ({ id: n.id, type: n.dataset.type, label: n.dataset.label, x: parseInt(n.style.left), y: parseInt(n.style.top), h: n.style.minHeight, instr: n.dataset.instr, qty: n.dataset.qty, partId: n.dataset.partId })), 
                 links: connections 
             }));
-            const toast = document.createElement('div'); toast.className = "fixed bottom-8 right-8 bg-blue-600 px-6 py-3 font-black uppercase italic tracking-widest z-[300]"; toast.innerText = "FOUNDRY_SYNC_COMPLETE"; document.body.appendChild(toast); setTimeout(() => toast.remove(), 2000);
+            const toast = document.createElement('div'); toast.className = "fixed bottom-8 right-8 bg-blue-600 px-6 py-3 font-black uppercase italic tracking-widest z-[300] text-white"; toast.innerText = "FOUNDRY_SYNC_COMPLETE"; document.body.appendChild(toast); setTimeout(() => toast.remove(), 2000);
+            updateInventoryMenu();
         }
-
+    
         function loadSavedLayout() {
             const rawData = localStorage.getItem(`flow_v1_${currentProjectId}`);
-            if (!rawData) { spawnNode('final', 1000, 300, 'PROJECT_ASSEMBLY', '', 'f_root'); return; }
+            if (!rawData) { spawnNode('final', 1000, 300, projectName, '', 'f_root'); return; }
             const data = JSON.parse(rawData); connections = data.links || [];
-            data.nodes.forEach(n => spawnNode(n.type, n.x, n.y, n.label, '', n.id, n.instr, n.qty || 1, n.partHash || ''));
-            
-            // Re-generate ports based on connections
+            data.nodes.forEach(n => spawnNode(n.type, n.x, n.y, n.label, '', n.id, n.instr, n.qty || 1, n.partId || ''));
             connections.forEach(l => { const idx = parseInt(l.tid.split('_').pop()); if (idx > 0) for(let i=1; i<=idx; i++) createPort(l.tn, i); });
+            document.querySelectorAll('.node').forEach(n => { if(n.dataset.type !== 'part') cleanupPorts(n.id); });
             
-            // Clean up any weird states from old saves
-            document.querySelectorAll('.node').forEach(n => {
-                if(n.dataset.type !== 'part') cleanupPorts(n.id);
-            });
+            // Check if root exists (in case project name changed)
+            const rootNode = document.getElementById('f_root');
+            if (rootNode) rootNode.querySelector('.flex.gap-2').innerText = projectName;
 
             setTimeout(drawWires, 300);
         }
-
+    
         function toggleModal(s) { document.getElementById('modalContainer').classList.toggle('hidden', !s); }
         function deselectNodes() { selectedNodeId = null; document.querySelectorAll('.node').forEach(n => n.style.borderColor = ''); }
-
+    
         function addProcessNode() {
             const content = document.getElementById('modalContent');
             content.innerHTML = `
                 <div class="space-y-6">
                     <h2 class="text-2xl font-black uppercase italic text-amber-500 tracking-tighter">Initialize_Process</h2>
-                    <select id="processPreset" onchange="document.getElementById('customProcessName').value = this.value" class="w-full bg-zinc-900 border border-zinc-800 p-3 text-sm font-bold uppercase text-white outline-none">
-                        <optgroup label="Fabrication">
-                            <option value="3D_PRINTING">3D_PRINTING</option>
-                            <option value="CNC_MACHINING">CNC_MACHINING</option>
-                            <option value="WELDING_FAB">WELDING_FAB</option>
-                        </optgroup>
-                        <optgroup label="Assembly">
-                            <option value="ASSEMBLY">ASSEMBLY</option>
-                        </optgroup>
-                        <optgroup label="Preparation">
-                            <option value="ULTRASONIC_CLEAN">ULTRASONIC_CLEAN</option>
-                            <option value="POWDER_COATING">POWDER_COATING</option>
-                        </optgroup>
-                    </select>
                     <input type="text" id="customProcessName" placeholder="PROCESS_NAME..." class="w-full bg-zinc-900 border border-zinc-800 p-4 text-xl font-black uppercase text-white outline-none">
                     <div class="flex gap-4">
                         <button onclick="toggleModal(false)" class="flex-1 text-zinc-500 font-bold uppercase">Cancel</button>
@@ -343,10 +356,13 @@
                 </div>`;
             toggleModal(true);
             const input = document.getElementById('customProcessName');
-            input.focus(); input.onkeydown = (e) => { if(e.key === 'Enter') document.getElementById('deployProc').click(); };
-            document.getElementById('deployProc').onclick = function() { const name = document.getElementById('customProcessName').value.trim(); if (name) { spawnNode('process', 500, 400, name, ''); toggleModal(false); } };
+            input.focus();
+            document.getElementById('deployProc').onclick = function() { 
+                const name = input.value.trim(); 
+                if (name) { spawnNode('process', 500, 400, name, ''); toggleModal(false); saveLayout(); } 
+            };
         }
-
+    
         init();
     </script>
 </body>
